@@ -38,7 +38,11 @@ public class HttpsClientHandler extends ChannelInboundHandlerAdapter {
                 new GenericFutureListener<Future<? super Channel>>() {
                     @Override
                     public void operationComplete(Future<? super Channel> future) throws Exception {
-                        ctx.writeAndFlush(getHelloRequest());
+                        if (future.isSuccess()) {
+                            ctx.writeAndFlush(getHelloRequest());
+                        } else {
+                            ctx.channel().close();
+                        }
                     }
                 }
         );

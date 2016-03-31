@@ -10,20 +10,39 @@ import io.netty.handler.codec.http2.Http2SecurityUtil;
 import io.netty.handler.ssl.*;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 
+import java.io.InputStream;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
+
 public class HttpsClient {
     public static void main(String[] args) throws Exception {
-        if (args.length != 2) {
-            System.out.println("Parameters: host port");
-            System.exit(-1);
+        String host;
+        int port;
+        if (args.length == 0) {
+            host = "localhost";
+        } else {
+            host = args[0];
         }
-        final String host = args[0];
-        final int port = Integer.parseInt(args[1]);
+        if (args.length <= 1) {
+            port = 8443;
+        } else {
+            port = Integer.parseInt(args[1]);
+        }
+        System.out.println("Connecting to [" + host + ":" + port + "] ...");
         final SslContext sslCtx;
         SslProvider provider = OpenSsl.isAlpnSupported() ? SslProvider.OPENSSL : SslProvider.JDK;
+        InputStream is = HttpsClient.class.getResourceAsStream("v1.private-key.pem.csr.crt");
+        CertificateFactory certFactory = CertificateFactory.getInstance("X.509");
+        X509Certificate cert = (X509Certificate) certFactory.generateCertificate(is);
+
         sslCtx = SslContextBuilder.forClient()
                 .sslProvider(provider)
                 .ciphers(Http2SecurityUtil.CIPHERS, SupportedCipherSuiteFilter.INSTANCE)
-                .trustManager(InsecureTrustManagerFactory.INSTANCE) // TODO security
+                .trustManager(cert) // trust our HttpsServer's self-signed certificate
+                //.trustManager(InsecureTrustManagerFactory.INSTANCE) // skip any certificate verification
+                // If no trustManager() is called, the JDK built-in certificates will be used to perform
+                // certificate verification, in which case our HttpsServer's self-signed certificate will
+                // effectively be rejected.
                 .build();
 
         EventLoopGroup workgroup = new NioEventLoopGroup();
