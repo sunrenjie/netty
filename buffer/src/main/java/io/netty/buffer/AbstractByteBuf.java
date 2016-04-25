@@ -57,16 +57,27 @@ public abstract class AbstractByteBuf extends ByteBuf {
     int writerIndex;
     private int markedReaderIndex;
     private int markedWriterIndex;
-
     private int maxCapacity;
-
-    private SwappedByteBuf swappedBuf;
 
     protected AbstractByteBuf(int maxCapacity) {
         if (maxCapacity < 0) {
             throw new IllegalArgumentException("maxCapacity: " + maxCapacity + " (expected: >= 0)");
         }
         this.maxCapacity = maxCapacity;
+    }
+
+    @Override
+    public boolean isReadOnly() {
+        return false;
+    }
+
+    @SuppressWarnings("deprecation")
+    @Override
+    public ByteBuf asReadOnly() {
+        if (isReadOnly()) {
+            return this;
+        }
+        return Unpooled.unmodifiableBuffer(this);
     }
 
     @Override
@@ -308,12 +319,7 @@ public abstract class AbstractByteBuf extends ByteBuf {
         if (endianness == order()) {
             return this;
         }
-
-        SwappedByteBuf swappedBuf = this.swappedBuf;
-        if (swappedBuf == null) {
-            this.swappedBuf = swappedBuf = newSwappedByteBuf();
-        }
-        return swappedBuf;
+        return newSwappedByteBuf();
     }
 
     /**

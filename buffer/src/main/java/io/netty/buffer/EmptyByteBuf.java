@@ -96,6 +96,16 @@ public final class EmptyByteBuf extends ByteBuf {
     }
 
     @Override
+    public ByteBuf asReadOnly() {
+        return Unpooled.unmodifiableBuffer(this);
+    }
+
+    @Override
+    public boolean isReadOnly() {
+        return false;
+    }
+
+    @Override
     public boolean isDirect() {
         return true;
     }

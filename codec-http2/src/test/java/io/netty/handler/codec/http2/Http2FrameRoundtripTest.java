@@ -15,6 +15,29 @@
 
 package io.netty.handler.codec.http2;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.buffer.CompositeByteBuf;
+import io.netty.buffer.EmptyByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelPromise;
+import io.netty.channel.DefaultChannelPromise;
+import io.netty.util.AsciiString;
+import io.netty.util.concurrent.EventExecutor;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
+
+import java.util.LinkedList;
+import java.util.List;
+
 import static io.netty.buffer.Unpooled.EMPTY_BUFFER;
 import static io.netty.handler.codec.http2.Http2CodecUtil.DEFAULT_MAX_HEADER_SIZE;
 import static io.netty.handler.codec.http2.Http2TestUtil.randomString;
@@ -34,30 +57,6 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufAllocator;
-import io.netty.buffer.CompositeByteBuf;
-import io.netty.buffer.EmptyByteBuf;
-import io.netty.buffer.ReadOnlyByteBuf;
-import io.netty.buffer.Unpooled;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelPromise;
-import io.netty.channel.DefaultChannelPromise;
-import io.netty.util.AsciiString;
-import io.netty.util.concurrent.EventExecutor;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
-import org.mockito.ArgumentCaptor;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.mockito.invocation.InvocationOnMock;
-import org.mockito.stubbing.Answer;
-
-import java.util.LinkedList;
-import java.util.List;
 
 /**
  * Tests encoding/decoding each HTTP2 frame type.
@@ -127,7 +126,7 @@ public class Http2FrameRoundtripTest {
             // Now verify that all of the reference counts are zero.
             for (ByteBuf buf : needReleasing) {
                 int expectedFinalRefCount = 0;
-                if (buf instanceof ReadOnlyByteBuf || buf instanceof EmptyByteBuf) {
+                if (buf.isReadOnly() || buf instanceof EmptyByteBuf) {
                     // Special case for when we're writing slices of the padding buffer.
                     expectedFinalRefCount = 1;
                 }

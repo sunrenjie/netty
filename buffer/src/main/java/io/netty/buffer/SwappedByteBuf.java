@@ -93,6 +93,16 @@ public class SwappedByteBuf extends ByteBuf {
     }
 
     @Override
+    public boolean isReadOnly() {
+        return buf.isReadOnly();
+    }
+
+    @Override
+    public ByteBuf asReadOnly() {
+        return Unpooled.unmodifiableBuffer(this);
+    }
+
+    @Override
     public boolean isDirect() {
         return buf.isDirect();
     }
