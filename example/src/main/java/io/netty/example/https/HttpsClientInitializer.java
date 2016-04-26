@@ -1,6 +1,7 @@
 package io.netty.example.https;
 
 
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
@@ -10,6 +11,7 @@ import io.netty.handler.codec.DelimiterBasedFrameDecoder;
 import io.netty.handler.codec.Delimiters;
 import io.netty.handler.codec.http.*;
 import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslHandler;
 
 public class HttpsClientInitializer extends ChannelInitializer<SocketChannel> {
     static String host;
@@ -25,7 +27,7 @@ public class HttpsClientInitializer extends ChannelInitializer<SocketChannel> {
     @Override
     public void initChannel(SocketChannel ch) throws Exception {
         ChannelPipeline pipeline = ch.pipeline();
-        pipeline.addLast(sslCtx.newHandler(ch.alloc()));
+        pipeline.addLast(new SslHandler(sslCtx.newEngine(ByteBufAllocator.DEFAULT, host, -1)));
         pipeline.addLast("request-encoder", new HttpRequestEncoder());
         pipeline.addLast("response-decoder", new HttpResponseDecoder());
         pipeline.addLast(new HttpObjectAggregator(1024 * 100));

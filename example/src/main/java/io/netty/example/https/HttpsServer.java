@@ -27,7 +27,6 @@ public class HttpsServer {
             port = 8443;
         }
         System.out.println("Binding to [localhost:" + port + "] ...");
-        //SelfSignedCertificate ssc = new SelfSignedCertificate();
         InputStream inCert = HttpsServer.class.getResourceAsStream("v1.private-key.pem.csr.crt");
         InputStream inKey = HttpsServer.class.getResourceAsStream("v1.private-key.pkcs8.pem");
         assert(inCert != null);
@@ -45,8 +44,8 @@ public class HttpsServer {
                         ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
                         "self-assigned-certificate for '*.self-assigned.cn' domain(s)"
                 )).build();
-        final DomainNameMapping<SslContext> mapping = new DomainMappingBuilder<SslContext>(sslCtx)
-                .add("*.self-assigned.cn", selfAsignedContext).build();
+        final DomainNameMapping<SslContext> mapping = new DomainMappingBuilder<SslContext>(selfAsignedContext)
+                .add("*.self-signed.cn", sslCtx).build();
         EventLoopGroup group = new NioEventLoopGroup();
         ServerBootstrap b = new ServerBootstrap();
         b.group(group).option(ChannelOption.SO_BACKLOG, 1024).channel(NioServerSocketChannel.class)

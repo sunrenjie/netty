@@ -19,7 +19,9 @@ public class HttpsClient {
         String host;
         int port;
         if (args.length == 0) {
-            host = "localhost";
+            host = "www.self-signed.cn";
+            System.out.println("#Info: Before running this, please be sure to add this line to /etc/hosts:");
+            System.out.println("'127.0.0.1 www.self-signed.cn'");
         } else {
             host = args[0];
         }
