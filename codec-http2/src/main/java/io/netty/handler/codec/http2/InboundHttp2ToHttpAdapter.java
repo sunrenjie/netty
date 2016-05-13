@@ -23,6 +23,7 @@ import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpStatusClass;
 import io.netty.handler.codec.http.HttpUtil;
+import io.netty.util.internal.UnstableApi;
 
 import static io.netty.handler.codec.http2.Http2Error.INTERNAL_ERROR;
 import static io.netty.handler.codec.http2.Http2Error.PROTOCOL_ERROR;
@@ -35,6 +36,7 @@ import static io.netty.util.internal.ObjectUtil.checkNotNull;
  * <p>
  * See {@link HttpToHttp2ConnectionHandler} to get translation from HTTP/1.x objects to HTTP/2 frames for writes.
  */
+@UnstableApi
 public class InboundHttp2ToHttpAdapter extends Http2EventAdapter {
     private static final ImmediateSendDetector DEFAULT_SEND_DETECTOR = new ImmediateSendDetector() {
         @Override
@@ -150,7 +152,7 @@ public class InboundHttp2ToHttpAdapter extends Http2EventAdapter {
     protected FullHttpMessage newMessage(Http2Stream stream, Http2Headers headers, boolean validateHttpHeaders,
                                          ByteBufAllocator alloc)
             throws Http2Exception {
-        return connection.isServer() ? HttpConversionUtil.toHttpRequest(stream.id(), headers, alloc,
+        return connection.isServer() ? HttpConversionUtil.toFullHttpRequest(stream.id(), headers, alloc,
                 validateHttpHeaders) : HttpConversionUtil.toHttpResponse(stream.id(), headers, alloc,
                                                                          validateHttpHeaders);
     }

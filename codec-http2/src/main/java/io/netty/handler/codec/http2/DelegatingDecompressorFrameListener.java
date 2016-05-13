@@ -21,6 +21,7 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.ByteToMessageDecoder;
 import io.netty.handler.codec.compression.ZlibCodecFactory;
 import io.netty.handler.codec.compression.ZlibWrapper;
+import io.netty.util.internal.UnstableApi;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_ENCODING;
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_LENGTH;
@@ -37,6 +38,7 @@ import static io.netty.util.internal.ObjectUtil.checkNotNull;
  * A HTTP2 frame listener that will decompress data frames according to the {@code content-encoding} header for each
  * stream. The decompression provided by this class will be applied to the data for the entire stream.
  */
+@UnstableApi
 public class DelegatingDecompressorFrameListener extends Http2FrameListenerDecorator {
 
     private final Http2Connection connection;
@@ -320,11 +322,6 @@ public class DelegatingDecompressorFrameListener extends Http2FrameListenerDecor
         }
 
         @Override
-        public int initialWindowSize(Http2Stream stream) {
-            return flowController.initialWindowSize(stream);
-        }
-
-        @Override
         public void incrementWindowSize(Http2Stream stream, int delta) throws Http2Exception {
             flowController.incrementWindowSize(stream, delta);
         }
@@ -364,6 +361,11 @@ public class DelegatingDecompressorFrameListener extends Http2FrameListenerDecor
         @Override
         public int unconsumedBytes(Http2Stream stream) {
             return flowController.unconsumedBytes(stream);
+        }
+
+        @Override
+        public int initialWindowSize(Http2Stream stream) {
+            return flowController.initialWindowSize(stream);
         }
     }
 
@@ -416,7 +418,7 @@ public class DelegatingDecompressorFrameListener extends Http2FrameListenerDecor
 
         /**
          * Increment the number of bytes after the decompression process. Under normal circumstances this
-         * delta should not exceed {@link Http2Decompressor#processedBytes()}.
+         * delta should not exceed {@link Http2Decompressor#processed)}.
          */
         void incrementDecompressedByes(int delta) {
             if (decompressed + delta < 0) {
@@ -426,10 +428,10 @@ public class DelegatingDecompressorFrameListener extends Http2FrameListenerDecor
         }
 
         /**
-         * Decrements {@link Http2Decompressor#processedBytes()} by {@code processedBytes} and determines the ratio
-         * between {@code processedBytes} and {@link Http2Decompressor#decompressedBytes()}.
-         * This ratio is used to decrement {@link Http2Decompressor#decompressedBytes()} and
-         * {@link Http2Decompressor#compressedBytes()}.
+         * Decrements {@link Http2Decompressor#processed} by {@code processedBytes} and determines the ratio
+         * between {@code processedBytes} and {@link Http2Decompressor#decompressed}.
+         * This ratio is used to decrement {@link Http2Decompressor#decompressed} and
+         * {@link Http2Decompressor#compressed}.
          * @param processedBytes The number of post-decompressed bytes that have been processed.
          * @return The number of pre-decompressed bytes that have been consumed.
          */

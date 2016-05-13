@@ -16,6 +16,7 @@
 package io.netty.resolver;
 
 import java.net.InetAddress;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -27,6 +28,6 @@ public final class DefaultHostsFileEntriesResolver implements HostsFileEntriesRe
 
     @Override
     public InetAddress address(String inetHost) {
-        return entries.get(inetHost);
+        return entries.get(inetHost.toLowerCase(Locale.ENGLISH));
     }
 }

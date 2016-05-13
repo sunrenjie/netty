@@ -15,10 +15,12 @@
 package io.netty.handler.codec.http2;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.util.internal.UnstableApi;
 
 /**
  * A {@link Http2FlowController} for controlling the inbound flow of {@code DATA} frames from the remote endpoint.
  */
+@UnstableApi
 public interface Http2LocalFlowController extends Http2FlowController {
     /**
      * Sets the writer to be use for sending {@code WINDOW_UPDATE} frames. This must be called before any flow
@@ -74,4 +76,11 @@ public interface Http2LocalFlowController extends Http2FlowController {
      * @return the number of unconsumed bytes for the stream.
      */
     int unconsumedBytes(Http2Stream stream);
+
+    /**
+     * Get the initial flow control window size for the given stream. This quantity is measured in number of bytes. Note
+     * the unavailable window portion can be calculated by {@link #initialWindowSize()} - {@link
+     * #windowSize(Http2Stream)}.
+     */
+    int initialWindowSize(Http2Stream stream);
 }

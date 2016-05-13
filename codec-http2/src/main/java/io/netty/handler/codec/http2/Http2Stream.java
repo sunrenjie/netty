@@ -15,9 +15,12 @@
 
 package io.netty.handler.codec.http2;
 
+import io.netty.util.internal.UnstableApi;
+
 /**
  * A single stream within an HTTP2 connection. Streams are compared to each other by priority.
  */
+@UnstableApi
 public interface Http2Stream {
 
     /**
@@ -162,13 +165,6 @@ public interface Http2Stream {
      * if this is the root node (i.e. the connection, itself).
      */
     Http2Stream parent();
-
-    /**
-     * Get the number of streams in the priority tree rooted at this node that are OK to exist in the priority
-     * tree on their own right. Some streams may be in the priority tree because their dependents require them to
-     * remain.
-     */
-    int prioritizableForTree();
 
     /**
      * Indicates whether or not this stream is a descendant in the priority tree from the given stream.

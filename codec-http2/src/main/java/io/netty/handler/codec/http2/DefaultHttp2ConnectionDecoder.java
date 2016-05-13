@@ -17,6 +17,7 @@ package io.netty.handler.codec.http2;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http2.Http2Exception.ClosedStreamCreationException;
+import io.netty.util.internal.UnstableApi;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -41,6 +42,7 @@ import static io.netty.util.internal.ObjectUtil.checkNotNull;
  * This interface enforces inbound flow control functionality through
  * {@link Http2LocalFlowController}
  */
+@UnstableApi
 public class DefaultHttp2ConnectionDecoder implements Http2ConnectionDecoder {
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(DefaultHttp2ConnectionDecoder.class);
     private Http2FrameListener internalFrameListener = new PrefaceFrameListener();
@@ -342,10 +344,8 @@ public class DefaultHttp2ConnectionDecoder implements Http2ConnectionDecoder {
             try {
                 if (stream == null) {
                     if (connection.streamMayHaveExisted(streamId)) {
-                        if (logger.isInfoEnabled()) {
-                            logger.info("%s ignoring PRIORITY frame for stream id %d. Stream doesn't exist but may " +
-                                        " have existed", ctx.channel(), streamId);
-                        }
+                        logger.info("{} ignoring PRIORITY frame for stream {}. Stream doesn't exist but may " +
+                                     " have existed", ctx.channel(), streamId);
                         return;
                     }
 
@@ -353,11 +353,9 @@ public class DefaultHttp2ConnectionDecoder implements Http2ConnectionDecoder {
                     // first frame to be received for a stream that we must create the stream.
                     stream = connection.remote().createIdleStream(streamId);
                 } else if (streamCreatedAfterGoAwaySent(streamId)) {
-                    if (logger.isInfoEnabled()) {
-                        logger.info("%s ignoring PRIORITY frame for stream id %d. Stream created after GOAWAY sent. " +
-                                    "Last known stream by peer " + connection.remote().lastStreamKnownByPeer(),
-                                    ctx.channel(), streamId);
-                    }
+                    logger.info("{} ignoring PRIORITY frame for stream {}. Stream created after GOAWAY sent. " +
+                                    "Last known stream by peer {}",
+                            ctx.channel(), streamId, connection.remote().lastStreamKnownByPeer());
                     return;
                 }
 
@@ -482,7 +480,7 @@ public class DefaultHttp2ConnectionDecoder implements Http2ConnectionDecoder {
             }
 
             if (parentStream == null) {
-                throw connectionError(PROTOCOL_ERROR, "Stream does not exist %d", streamId);
+                throw connectionError(PROTOCOL_ERROR, "Stream %d does not exist", streamId);
             }
 
             switch (parentStream.state()) {
@@ -555,19 +553,18 @@ public class DefaultHttp2ConnectionDecoder implements Http2ConnectionDecoder {
                 String frameName) throws Http2Exception {
             if (stream == null) {
                 if (streamCreatedAfterGoAwaySent(streamId)) {
-                    if (logger.isInfoEnabled()) {
-                        logger.info("%s ignoring %s frame for stream id %d. Stream sent after GOAWAY sent",
-                                ctx.channel(), frameName, streamId);
-                    }
+                    logger.info("{} ignoring {} frame for stream {}. Stream sent after GOAWAY sent",
+                            ctx.channel(), frameName, streamId);
                     return true;
                 }
                 // Its possible that this frame would result in stream ID out of order creation (PROTOCOL ERROR) and its
                 // also possible that this frame is received on a CLOSED stream (STREAM_CLOSED after a RST_STREAM is
                 // sent). We don't have enough information to know for sure, so we choose the lesser of the two errors.
-                throw streamError(streamId, STREAM_CLOSED, "Received HEADERS frame for an unknown stream %d", streamId);
+                throw streamError(streamId, STREAM_CLOSED, "Received %s frame for an unknown stream %d",
+                                  frameName, streamId);
             } else if (stream.isResetSent() || streamCreatedAfterGoAwaySent(streamId)) {
                 if (logger.isInfoEnabled()) {
-                    logger.info("%s ignoring %s frame for stream id %d. %s", ctx.channel(), frameName,
+                    logger.info("{} ignoring {} frame for stream {} {}", ctx.channel(), frameName,
                             stream.isResetSent() ? "RST_STREAM sent." :
                                 ("Stream created after GOAWAY sent. Last known stream by peer " +
                                  connection.remote().lastStreamKnownByPeer()));
@@ -597,7 +594,7 @@ public class DefaultHttp2ConnectionDecoder implements Http2ConnectionDecoder {
 
         private void verifyStreamMayHaveExisted(int streamId) throws Http2Exception {
             if (!connection.streamMayHaveExisted(streamId)) {
-                throw connectionError(PROTOCOL_ERROR, "Stream does not exist %d", streamId);
+                throw connectionError(PROTOCOL_ERROR, "Stream %d does not exist", streamId);
             }
         }
     }

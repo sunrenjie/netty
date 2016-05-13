@@ -15,10 +15,12 @@
 package io.netty.handler.codec.http2;
 
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.util.internal.UnstableApi;
 
 /**
  * Base interface for all HTTP/2 flow controllers.
  */
+@UnstableApi
 public interface Http2FlowController {
     /**
      * Set the {@link ChannelHandlerContext} for which to apply flow control on.
@@ -53,13 +55,6 @@ public interface Http2FlowController {
      * frames which are subject to flow control. This quantity is measured in number of bytes.
      */
     int windowSize(Http2Stream stream);
-
-    /**
-     * Get the initial flow control window size for the given stream. This quantity is measured in number of bytes. Note
-     * the unavailable window portion can be calculated by {@link #initialWindowSize()} - {@link
-     * #windowSize(Http2Stream)}.
-     */
-    int initialWindowSize(Http2Stream stream);
 
     /**
      * Increments the size of the stream's flow control window by the given delta.
