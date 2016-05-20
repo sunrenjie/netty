@@ -39,6 +39,10 @@ public class DuplicatedByteBuf extends AbstractDerivedByteBuf {
     private final ByteBuf buffer;
 
     public DuplicatedByteBuf(ByteBuf buffer) {
+        this(buffer, buffer.readerIndex(), buffer.writerIndex());
+    }
+
+    DuplicatedByteBuf(ByteBuf buffer, int readerIndex, int writerIndex) {
         super(buffer.maxCapacity());
 
         if (buffer instanceof DuplicatedByteBuf) {
@@ -47,7 +51,7 @@ public class DuplicatedByteBuf extends AbstractDerivedByteBuf {
             this.buffer = buffer;
         }
 
-        setIndex(buffer.readerIndex(), buffer.writerIndex());
+        setIndex(readerIndex, writerIndex);
         markReaderIndex();
         markWriterIndex();
     }

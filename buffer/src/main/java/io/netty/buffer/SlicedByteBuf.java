@@ -64,6 +64,10 @@ public class SlicedByteBuf extends AbstractDerivedByteBuf {
         writerIndex(length);
     }
 
+    final int adjustment() {
+        return adjustment;
+    }
+
     @Override
     public ByteBuf unwrap() {
         return buffer;
