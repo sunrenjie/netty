@@ -15,43 +15,27 @@
  */
 package io.netty.channel.epoll;
 
-import static io.netty.channel.unix.NativeInetAddress.ipv4MappedIpv6Address;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelOutboundBuffer;
 import io.netty.channel.socket.DatagramPacket;
-import io.netty.util.concurrent.FastThreadLocal;
-
+import io.netty.channel.unix.IovArray;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+
+import static io.netty.channel.unix.Limits.UIO_MAX_IOV;
+import static io.netty.channel.unix.NativeInetAddress.ipv4MappedIpv6Address;
 
 /**
  * Support <a href="http://linux.die.net/man/2/sendmmsg">sendmmsg(...)</a> on linux with GLIBC 2.14+
  */
 final class NativeDatagramPacketArray implements ChannelOutboundBuffer.MessageProcessor {
 
-    private static final FastThreadLocal<NativeDatagramPacketArray> ARRAY =
-            new FastThreadLocal<NativeDatagramPacketArray>() {
-                @Override
-                protected NativeDatagramPacketArray initialValue() throws Exception {
-                    return new NativeDatagramPacketArray();
-                }
-
-                @Override
-                protected void onRemoval(NativeDatagramPacketArray value) throws Exception {
-                    NativeDatagramPacket[] array = value.packets;
-                    // Release all packets
-                    for (int i = 0; i < array.length; i++) {
-                        array[i].release();
-                    }
-                }
-            };
-
     // Use UIO_MAX_IOV as this is the maximum number we can write with one sendmmsg(...) call.
-    private final NativeDatagramPacket[] packets = new NativeDatagramPacket[Native.UIO_MAX_IOV];
+    private final NativeDatagramPacket[] packets = new NativeDatagramPacket[UIO_MAX_IOV];
     private int count;
 
-    private NativeDatagramPacketArray() {
+    NativeDatagramPacketArray() {
         for (int i = 0; i < packets.length; i++) {
             packets[i] = new NativeDatagramPacket();
         }
@@ -81,7 +65,7 @@ final class NativeDatagramPacketArray implements ChannelOutboundBuffer.MessagePr
     }
 
     @Override
-    public boolean processMessage(Object msg) throws Exception {
+    public boolean processMessage(Object msg) {
         return msg instanceof DatagramPacket && add((DatagramPacket) msg);
     }
 
@@ -99,15 +83,15 @@ final class NativeDatagramPacketArray implements ChannelOutboundBuffer.MessagePr
         return packets;
     }
 
-    /**
-     * Returns a {@link NativeDatagramPacketArray} which is filled with the flushed messages of
-     * {@link ChannelOutboundBuffer}.
-     */
-    static NativeDatagramPacketArray getInstance(ChannelOutboundBuffer buffer) throws Exception {
-        NativeDatagramPacketArray array = ARRAY.get();
-        array.count = 0;
-        buffer.forEachFlushedMessage(array);
-        return array;
+    void clear() {
+        this.count = 0;
+    }
+
+    void release() {
+        // Release all packets
+        for (NativeDatagramPacket datagramPacket : packets) {
+            datagramPacket.release();
+        }
     }
 
     /**
@@ -116,8 +100,8 @@ final class NativeDatagramPacketArray implements ChannelOutboundBuffer.MessagePr
     @SuppressWarnings("unused")
     static final class NativeDatagramPacket {
         // Each NativeDatagramPackets holds a IovArray which is used for gathering writes.
-        // This is ok as NativeDatagramPacketArray is always obtained via a FastThreadLocal and
-        // so the memory needed is quite small anyway.
+        // This is ok as NativeDatagramPacketArray is always obtained from an EpollEventLoop
+        // field so the memory needed is quite small anyway.
         private final IovArray array = new IovArray();
 
         // This is the actual struct iovec*

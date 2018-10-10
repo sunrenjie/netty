@@ -39,6 +39,9 @@ public class LineBasedFrameDecoder extends ByteToMessageDecoder {
     private boolean discarding;
     private int discardedBytes;
 
+    /** Last scan position. */
+    private int offset;
+
     /**
      * Creates a new decoder.
      * @param maxLength  the maximum length of the decoded frame.
@@ -114,6 +117,7 @@ public class LineBasedFrameDecoder extends ByteToMessageDecoder {
                     discardedBytes = length;
                     buffer.readerIndex(buffer.writerIndex());
                     discarding = true;
+                    offset = 0;
                     if (failFast) {
                         fail(ctx, "over " + discardedBytes);
                     }
@@ -133,6 +137,8 @@ public class LineBasedFrameDecoder extends ByteToMessageDecoder {
             } else {
                 discardedBytes += buffer.readableBytes();
                 buffer.readerIndex(buffer.writerIndex());
+                // We skip everything in the buffer, we need to set the offset to 0 again.
+                offset = 0;
             }
             return null;
         }
@@ -152,10 +158,16 @@ public class LineBasedFrameDecoder extends ByteToMessageDecoder {
      * Returns the index in the buffer of the end of line found.
      * Returns -1 if no end of line was found in the buffer.
      */
-    private static int findEndOfLine(final ByteBuf buffer) {
-        int i = buffer.forEachByte(ByteProcessor.FIND_LF);
-        if (i > 0 && buffer.getByte(i - 1) == '\r') {
-            i--;
+    private int findEndOfLine(final ByteBuf buffer) {
+        int totalLength = buffer.readableBytes();
+        int i = buffer.forEachByte(buffer.readerIndex() + offset, totalLength - offset, ByteProcessor.FIND_LF);
+        if (i >= 0) {
+            offset = 0;
+            if (i > 0 && buffer.getByte(i - 1) == '\r') {
+                i--;
+            }
+        } else {
+            offset = totalLength;
         }
         return i;
     }

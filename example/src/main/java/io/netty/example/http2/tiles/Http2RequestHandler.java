@@ -69,7 +69,7 @@ public class Http2RequestHandler extends SimpleChannelInboundHandler<FullHttpReq
         }
     }
 
-    private void sendBadRequest(ChannelHandlerContext ctx, String streamId) {
+    private static void sendBadRequest(ChannelHandlerContext ctx, String streamId) {
         FullHttpResponse response = new DefaultFullHttpResponse(HTTP_1_1, BAD_REQUEST, EMPTY_BUFFER);
         streamId(response, streamId);
         ctx.writeAndFlush(response);
@@ -106,11 +106,11 @@ public class Http2RequestHandler extends SimpleChannelInboundHandler<FullHttpReq
         }, latency, TimeUnit.MILLISECONDS);
     }
 
-    private String streamId(FullHttpRequest request) {
+    private static String streamId(FullHttpRequest request) {
         return request.headers().get(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text());
     }
 
-    private void streamId(FullHttpResponse response, String streamId) {
+    private static void streamId(FullHttpResponse response, String streamId) {
         response.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text(), streamId);
     }
 

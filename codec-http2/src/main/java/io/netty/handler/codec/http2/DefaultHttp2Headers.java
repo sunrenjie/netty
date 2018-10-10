@@ -14,10 +14,6 @@
  */
 package io.netty.handler.codec.http2;
 
-import static io.netty.handler.codec.http2.Http2Error.PROTOCOL_ERROR;
-import static io.netty.handler.codec.http2.Http2Exception.connectionError;
-import static io.netty.util.AsciiString.CASE_SENSITIVE_HASHER;
-import static io.netty.util.AsciiString.isUpperCase;
 import io.netty.handler.codec.CharSequenceValueConverter;
 import io.netty.handler.codec.DefaultHeaders;
 import io.netty.util.AsciiString;
@@ -25,16 +21,23 @@ import io.netty.util.ByteProcessor;
 import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.UnstableApi;
 
+import static io.netty.handler.codec.http2.Http2Error.PROTOCOL_ERROR;
+import static io.netty.handler.codec.http2.Http2Exception.connectionError;
+import static io.netty.handler.codec.http2.Http2Headers.PseudoHeaderName.hasPseudoHeaderFormat;
+import static io.netty.util.AsciiString.CASE_INSENSITIVE_HASHER;
+import static io.netty.util.AsciiString.CASE_SENSITIVE_HASHER;
+import static io.netty.util.AsciiString.isUpperCase;
+
 @UnstableApi
 public class DefaultHttp2Headers
         extends DefaultHeaders<CharSequence, CharSequence, Http2Headers> implements Http2Headers {
     private static final ByteProcessor HTTP2_NAME_VALIDATOR_PROCESSOR = new ByteProcessor() {
         @Override
-        public boolean process(byte value) throws Exception {
+        public boolean process(byte value) {
             return !isUpperCase(value);
         }
     };
-    private static final NameValidator<CharSequence> HTTP2_NAME_VALIDATOR = new NameValidator<CharSequence>() {
+    static final NameValidator<CharSequence> HTTP2_NAME_VALIDATOR = new NameValidator<CharSequence>() {
         @Override
         public void validateName(CharSequence name) {
             if (name == null || name.length() == 0) {
@@ -120,11 +123,7 @@ public class DefaultHttp2Headers
 
     @Override
     public boolean equals(Object o) {
-        if (!(o instanceof Http2Headers)) {
-            return false;
-        }
-
-        return equals((Http2Headers) o, CASE_SENSITIVE_HASHER);
+        return o instanceof Http2Headers && equals((Http2Headers) o, CASE_SENSITIVE_HASHER);
     }
 
     @Override
@@ -188,6 +187,16 @@ public class DefaultHttp2Headers
     }
 
     @Override
+    public boolean contains(CharSequence name, CharSequence value) {
+        return contains(name, value, false);
+    }
+
+    @Override
+    public boolean contains(CharSequence name, CharSequence value, boolean caseInsensitive) {
+        return contains(name, value, caseInsensitive ? CASE_INSENSITIVE_HASHER : CASE_SENSITIVE_HASHER);
+    }
+
+    @Override
     protected final HeaderEntry<CharSequence, CharSequence> newHeaderEntry(int h, CharSequence name, CharSequence value,
                                                            HeaderEntry<CharSequence, CharSequence> next) {
         return new Http2HeaderEntry(h, name, value, next);
@@ -201,7 +210,7 @@ public class DefaultHttp2Headers
             this.next = next;
 
             // Make sure the pseudo headers fields are first in iteration order
-            if (key.length() != 0 && key.charAt(0) == ':') {
+            if (hasPseudoHeaderFormat(key)) {
                 after = firstNonPseudo;
                 before = firstNonPseudo.before();
             } else {

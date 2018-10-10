@@ -20,9 +20,11 @@ import org.junit.Test;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Iterator;
 
 import static io.netty.util.AsciiString.contentEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class CombinedHttpHeadersTest {
@@ -166,7 +168,7 @@ public class CombinedHttpHeadersTest {
     }
 
     @Test
-    public void addIterableCsvEmtpy() {
+    public void addIterableCsvEmpty() {
         final CombinedHttpHeaders headers = newCombinedHttpHeaders();
         headers.add(HEADER_NAME, Collections.<CharSequence>emptyList());
         assertEquals(Arrays.asList(""), headers.getAll(HEADER_NAME));
@@ -270,5 +272,59 @@ public class CombinedHttpHeadersTest {
         assertEquals(Arrays.asList("a,b,c"), headers.getAll(HEADER_NAME));
         headers.set(HEADER_NAME, "\"a,b,c\"");
         assertEquals(Arrays.asList("a,b,c"), headers.getAll(HEADER_NAME));
+    }
+
+    @Test
+    public void owsTrimming() {
+        final CombinedHttpHeaders headers = newCombinedHttpHeaders();
+        headers.set(HEADER_NAME, Arrays.asList("\ta", "   ", "  b ", "\t \t"));
+        headers.add(HEADER_NAME, " c, d \t");
+
+        assertEquals(Arrays.asList("a", "", "b", "", "c, d"), headers.getAll(HEADER_NAME));
+        assertEquals("a,,b,,\"c, d\"", headers.get(HEADER_NAME));
+
+        assertTrue(headers.containsValue(HEADER_NAME, "a", true));
+        assertTrue(headers.containsValue(HEADER_NAME, " a ", true));
+        assertTrue(headers.containsValue(HEADER_NAME, "a", true));
+        assertFalse(headers.containsValue(HEADER_NAME, "a,b", true));
+
+        assertFalse(headers.containsValue(HEADER_NAME, " c, d ", true));
+        assertFalse(headers.containsValue(HEADER_NAME, "c, d", true));
+        assertTrue(headers.containsValue(HEADER_NAME, " c ", true));
+        assertTrue(headers.containsValue(HEADER_NAME, "d", true));
+
+        assertTrue(headers.containsValue(HEADER_NAME, "\t", true));
+        assertTrue(headers.containsValue(HEADER_NAME, "", true));
+
+        assertFalse(headers.containsValue(HEADER_NAME, "e", true));
+
+        HttpHeaders copiedHeaders = newCombinedHttpHeaders().add(headers);
+        assertEquals(Arrays.asList("a", "", "b", "", "c, d"), copiedHeaders.getAll(HEADER_NAME));
+    }
+
+    @Test
+    public void valueIterator() {
+        final CombinedHttpHeaders headers = newCombinedHttpHeaders();
+        headers.set(HEADER_NAME, Arrays.asList("\ta", "   ", "  b ", "\t \t"));
+        headers.add(HEADER_NAME, " c, d \t");
+
+        assertFalse(headers.valueStringIterator("foo").hasNext());
+        assertValueIterator(headers.valueStringIterator(HEADER_NAME));
+        assertFalse(headers.valueCharSequenceIterator("foo").hasNext());
+        assertValueIterator(headers.valueCharSequenceIterator(HEADER_NAME));
+    }
+
+    private static void assertValueIterator(Iterator<? extends CharSequence> strItr) {
+        assertTrue(strItr.hasNext());
+        assertEquals("a", strItr.next());
+        assertTrue(strItr.hasNext());
+        assertEquals("", strItr.next());
+        assertTrue(strItr.hasNext());
+        assertEquals("b", strItr.next());
+        assertTrue(strItr.hasNext());
+        assertEquals("", strItr.next());
+        assertTrue(strItr.hasNext());
+        assertEquals("c, d", strItr.next());
+        assertFalse(strItr.hasNext());
     }
 }

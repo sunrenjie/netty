@@ -26,8 +26,11 @@ import io.netty.channel.WriteBufferWaterMark;
 import java.io.IOException;
 import java.util.Map;
 
+import static io.netty.channel.unix.Limits.SSIZE_MAX;
+
 public class EpollChannelConfig extends DefaultChannelConfig {
     final AbstractEpollChannel channel;
+    private volatile long maxBytesPerGatheringWrite = SSIZE_MAX;
 
     EpollChannelConfig(AbstractEpollChannel channel) {
         super(channel);
@@ -86,6 +89,10 @@ public class EpollChannelConfig extends DefaultChannelConfig {
 
     @Override
     public EpollChannelConfig setRecvByteBufAllocator(RecvByteBufAllocator allocator) {
+        if (!(allocator.newHandle() instanceof RecvByteBufAllocator.ExtendedHandle)) {
+            throw new IllegalArgumentException("allocator.newHandle() must return an object of type: " +
+                    RecvByteBufAllocator.ExtendedHandle.class);
+        }
         super.setRecvByteBufAllocator(allocator);
         return this;
     }
@@ -173,5 +180,13 @@ public class EpollChannelConfig extends DefaultChannelConfig {
     @Override
     protected final void autoReadCleared() {
         channel.clearEpollIn();
+    }
+
+    final void setMaxBytesPerGatheringWrite(long maxBytesPerGatheringWrite) {
+        this.maxBytesPerGatheringWrite = maxBytesPerGatheringWrite;
+    }
+
+    final long getMaxBytesPerGatheringWrite() {
+        return maxBytesPerGatheringWrite;
     }
 }

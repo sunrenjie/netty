@@ -17,7 +17,6 @@
 package io.netty.bootstrap;
 
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelException;
 import io.netty.channel.ChannelFactory;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
@@ -38,7 +37,6 @@ import io.netty.resolver.AbstractAddressResolver;
 import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.Promise;
-import io.netty.util.internal.OneTimeTask;
 import org.junit.AfterClass;
 import org.junit.Test;
 
@@ -71,7 +69,6 @@ public class BootstrapTest {
 
     @Test(timeout = 10000)
     public void testBindDeadLock() throws Exception {
-
         final Bootstrap bootstrapA = new Bootstrap();
         bootstrapA.group(groupA);
         bootstrapA.channel(LocalChannel.class);
@@ -108,7 +105,6 @@ public class BootstrapTest {
 
     @Test(timeout = 10000)
     public void testConnectDeadLock() throws Exception {
-
         final Bootstrap bootstrapA = new Bootstrap();
         bootstrapA.group(groupA);
         bootstrapA.channel(LocalChannel.class);
@@ -236,7 +232,6 @@ public class BootstrapTest {
 
     @Test
     public void testAsyncResolutionSuccess() throws Exception {
-
         final Bootstrap bootstrapA = new Bootstrap();
         bootstrapA.group(groupA);
         bootstrapA.channel(LocalChannel.class);
@@ -255,7 +250,6 @@ public class BootstrapTest {
 
     @Test
     public void testAsyncResolutionFailure() throws Exception {
-
         final Bootstrap bootstrapA = new Bootstrap();
         bootstrapA.group(groupA);
         bootstrapA.channel(LocalChannel.class);
@@ -275,6 +269,28 @@ public class BootstrapTest {
         assertThat(connectFuture.await(10000), is(true));
         assertThat(connectFuture.cause(), is(instanceOf(UnknownHostException.class)));
         assertThat(connectFuture.channel().isOpen(), is(false));
+    }
+
+    @Test
+    public void testChannelFactoryFailureNotifiesPromise() throws Exception {
+        final RuntimeException exception = new RuntimeException("newChannel crash");
+
+        final Bootstrap bootstrap = new Bootstrap()
+                .handler(dummyHandler)
+                .group(groupA)
+                .channelFactory(new ChannelFactory<Channel>() {
+            @Override
+            public Channel newChannel() {
+                throw exception;
+            }
+        });
+
+        ChannelFuture connectFuture = bootstrap.connect(LocalAddress.ANY);
+
+        // Should fail with the RuntimeException.
+        assertThat(connectFuture.await(10000), is(true));
+        assertThat(connectFuture.cause(), sameInstance((Throwable) exception));
+        assertThat(connectFuture.channel(), is(not(nullValue())));
     }
 
     private static final class DelayedEventLoopGroup extends DefaultEventLoop {
@@ -307,6 +323,11 @@ public class BootstrapTest {
         }
 
         @Override
+        public ChannelFuture register(ChannelPromise promise) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public ChannelFuture register(Channel channel, final ChannelPromise promise) {
             throw new UnsupportedOperationException();
         }
@@ -335,7 +356,7 @@ public class BootstrapTest {
                 @Override
                 protected void doResolve(
                         final SocketAddress unresolvedAddress, final Promise<SocketAddress> promise) {
-                    executor().execute(new OneTimeTask() {
+                    executor().execute(new Runnable() {
                         @Override
                         public void run() {
                             if (success) {
@@ -351,7 +372,7 @@ public class BootstrapTest {
                 protected void doResolveAll(
                         final SocketAddress unresolvedAddress, final Promise<List<SocketAddress>> promise)
                         throws Exception {
-                    executor().execute(new OneTimeTask() {
+                    executor().execute(new Runnable() {
                         @Override
                         public void run() {
                             if (success) {

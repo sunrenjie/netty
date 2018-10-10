@@ -18,13 +18,18 @@ package io.netty.testsuite.transport.socket;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.testsuite.util.TestUtils;
+import io.netty.util.NetUtil;
 import io.netty.util.concurrent.ImmediateEventExecutor;
 import io.netty.util.concurrent.Promise;
 import org.junit.Test;
 
 import java.net.InetSocketAddress;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 
 import static org.junit.Assert.*;
 
@@ -63,6 +68,46 @@ public class SocketConnectTest extends AbstractSocketTest {
             }
             if (serverChannel != null) {
                 serverChannel.close().syncUninterruptibly();
+            }
+        }
+    }
+
+    @Test(timeout = 3000)
+    public void testChannelEventsFiredWhenClosedDirectly() throws Throwable {
+        run();
+    }
+
+    public void testChannelEventsFiredWhenClosedDirectly(ServerBootstrap sb, Bootstrap cb) throws Throwable {
+        final BlockingQueue<Integer> events = new LinkedBlockingQueue<Integer>();
+
+        Channel sc = null;
+        Channel cc = null;
+        try {
+            sb.childHandler(new ChannelInboundHandlerAdapter());
+            sc = sb.bind().syncUninterruptibly().channel();
+
+            cb.handler(new ChannelInboundHandlerAdapter() {
+                @Override
+                public void channelActive(ChannelHandlerContext ctx) throws Exception {
+                    events.add(0);
+                }
+
+                @Override
+                public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+                    events.add(1);
+                }
+            });
+            // Connect and directly close again.
+            cc = cb.connect(sc.localAddress()).addListener(ChannelFutureListener.CLOSE).
+                    syncUninterruptibly().channel();
+            assertEquals(0, events.take().intValue());
+            assertEquals(1, events.take().intValue());
+        } finally {
+            if (cc != null) {
+                cc.close();
+            }
+            if (sc != null) {
+                sc.close();
             }
         }
     }

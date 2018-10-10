@@ -172,6 +172,7 @@ public class PendingWriteQueueTest {
     private static void assertQueueEmpty(PendingWriteQueue queue) {
         assertTrue(queue.isEmpty());
         assertEquals(0, queue.size());
+        assertEquals(0, queue.bytes());
         assertNull(queue.current());
         assertNull(queue.removeAndWrite());
         assertNull(queue.removeAndWriteAll());
@@ -197,9 +198,14 @@ public class PendingWriteQueueTest {
         assertNull(channel.readOutbound());
     }
 
+    private static EmbeddedChannel newChannel() {
+        // Add a handler so we can access a ChannelHandlerContext via the ChannelPipeline.
+        return new EmbeddedChannel(new ChannelHandlerAdapter() { });
+    }
+
     @Test
     public void testRemoveAndFailAllReentrantFailAll() {
-        EmbeddedChannel channel = new EmbeddedChannel();
+        EmbeddedChannel channel = newChannel();
         final PendingWriteQueue queue = new PendingWriteQueue(channel.pipeline().firstContext());
 
         ChannelPromise promise = channel.newPromise();
@@ -222,9 +228,70 @@ public class PendingWriteQueueTest {
     }
 
     @Test
+    public void testRemoveAndWriteAllReentrantWrite() {
+        EmbeddedChannel channel = new EmbeddedChannel(new ChannelOutboundHandlerAdapter() {
+            @Override
+            public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
+                // Convert to writeAndFlush(...) so the promise will be notified by the transport.
+                ctx.writeAndFlush(msg, promise);
+            }
+        }, new ChannelOutboundHandlerAdapter());
+
+        final PendingWriteQueue queue = new PendingWriteQueue(channel.pipeline().lastContext());
+
+        ChannelPromise promise = channel.newPromise();
+        final ChannelPromise promise3 = channel.newPromise();
+        promise.addListener(new ChannelFutureListener() {
+            @Override
+            public void operationComplete(ChannelFuture future) {
+                queue.add(3L, promise3);
+            }
+        });
+        queue.add(1L, promise);
+        ChannelPromise promise2 = channel.newPromise();
+        queue.add(2L, promise2);
+        queue.removeAndWriteAll();
+
+        assertTrue(promise.isDone());
+        assertTrue(promise.isSuccess());
+        assertTrue(promise2.isDone());
+        assertTrue(promise2.isSuccess());
+        assertTrue(promise3.isDone());
+        assertTrue(promise3.isSuccess());
+        assertTrue(channel.finish());
+        assertEquals(1L, channel.readOutbound());
+        assertEquals(2L, channel.readOutbound());
+        assertEquals(3L, channel.readOutbound());
+    }
+
+    @Test
+    public void testRemoveAndWriteAllWithVoidPromise() {
+        EmbeddedChannel channel = new EmbeddedChannel(new ChannelOutboundHandlerAdapter() {
+            @Override
+            public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
+                // Convert to writeAndFlush(...) so the promise will be notified by the transport.
+                ctx.writeAndFlush(msg, promise);
+            }
+        }, new ChannelOutboundHandlerAdapter());
+
+        final PendingWriteQueue queue = new PendingWriteQueue(channel.pipeline().lastContext());
+
+        ChannelPromise promise = channel.newPromise();
+        queue.add(1L, promise);
+        queue.add(2L, channel.voidPromise());
+        queue.removeAndWriteAll();
+
+        assertTrue(channel.finish());
+        assertTrue(promise.isDone());
+        assertTrue(promise.isSuccess());
+        assertEquals(1L, channel.readOutbound());
+        assertEquals(2L, channel.readOutbound());
+    }
+
+    @Test
     public void testRemoveAndFailAllReentrantWrite() {
         final List<Integer> failOrder = Collections.synchronizedList(new ArrayList<Integer>());
-        EmbeddedChannel channel = new EmbeddedChannel();
+        EmbeddedChannel channel = newChannel();
         final PendingWriteQueue queue = new PendingWriteQueue(channel.pipeline().firstContext());
 
         ChannelPromise promise = channel.newPromise();
@@ -267,7 +334,7 @@ public class PendingWriteQueueTest {
 
     @Test
     public void testRemoveAndWriteAllReentrance() {
-        EmbeddedChannel channel = new EmbeddedChannel();
+        EmbeddedChannel channel = newChannel();
         final PendingWriteQueue queue = new PendingWriteQueue(channel.pipeline().firstContext());
 
         ChannelPromise promise = channel.newPromise();
@@ -296,7 +363,7 @@ public class PendingWriteQueueTest {
     // See https://github.com/netty/netty/issues/3967
     @Test
     public void testCloseChannelOnCreation() {
-        EmbeddedChannel channel = new EmbeddedChannel(new ChannelInboundHandlerAdapter());
+        EmbeddedChannel channel = newChannel();
         ChannelHandlerContext context = channel.pipeline().firstContext();
         channel.close().syncUninterruptibly();
 
@@ -334,5 +401,7 @@ public class PendingWriteQueueTest {
         }
     }
 
-    private static final class TestException extends Exception { }
+    private static final class TestException extends Exception {
+        private static final long serialVersionUID = -9018570103039458401L;
+    }
 }

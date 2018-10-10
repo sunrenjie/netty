@@ -30,7 +30,6 @@ import io.netty.resolver.AddressResolverGroup;
 import io.netty.util.AttributeKey;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.FutureListener;
-import io.netty.util.internal.OneTimeTask;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -70,13 +69,15 @@ public class Bootstrap extends AbstractBootstrap<Bootstrap, Channel> {
 
     /**
      * Sets the {@link NameResolver} which will resolve the address of the unresolved named address.
+     *
+     * @param resolver the {@link NameResolver} for this {@code Bootstrap}; may be {@code null}, in which case a default
+     *                 resolver will be used
+     *
+     * @see io.netty.resolver.DefaultAddressResolverGroup
      */
     @SuppressWarnings("unchecked")
     public Bootstrap resolver(AddressResolverGroup<?> resolver) {
-        if (resolver == null) {
-            throw new NullPointerException("resolver");
-        }
-        this.resolver = (AddressResolverGroup<SocketAddress>) resolver;
+        this.resolver = (AddressResolverGroup<SocketAddress>) (resolver == null ? DEFAULT_RESOLVER : resolver);
         return this;
     }
 
@@ -90,7 +91,7 @@ public class Bootstrap extends AbstractBootstrap<Bootstrap, Channel> {
     }
 
     /**
-     * @see {@link #remoteAddress(SocketAddress)}
+     * @see #remoteAddress(SocketAddress)
      */
     public Bootstrap remoteAddress(String inetHost, int inetPort) {
         remoteAddress = InetSocketAddress.createUnresolved(inetHost, inetPort);
@@ -98,7 +99,7 @@ public class Bootstrap extends AbstractBootstrap<Bootstrap, Channel> {
     }
 
     /**
-     * @see {@link #remoteAddress(SocketAddress)}
+     * @see #remoteAddress(SocketAddress)
      */
     public Bootstrap remoteAddress(InetAddress inetHost, int inetPort) {
         remoteAddress = new InetSocketAddress(inetHost, inetPort);
@@ -156,7 +157,7 @@ public class Bootstrap extends AbstractBootstrap<Bootstrap, Channel> {
     }
 
     /**
-     * @see {@link #connect()}
+     * @see #connect()
      */
     private ChannelFuture doResolveAndConnect(final SocketAddress remoteAddress, final SocketAddress localAddress) {
         final ChannelFuture regFuture = initAndRegister();
@@ -173,7 +174,7 @@ public class Bootstrap extends AbstractBootstrap<Bootstrap, Channel> {
             regFuture.addListener(new ChannelFutureListener() {
                 @Override
                 public void operationComplete(ChannelFuture future) throws Exception {
-                    // Direclty obtain the cause and do a null check so we only need one volatile read in case of a
+                    // Directly obtain the cause and do a null check so we only need one volatile read in case of a
                     // failure.
                     Throwable cause = future.cause();
                     if (cause != null) {
@@ -194,44 +195,47 @@ public class Bootstrap extends AbstractBootstrap<Bootstrap, Channel> {
 
     private ChannelFuture doResolveAndConnect0(final Channel channel, SocketAddress remoteAddress,
                                                final SocketAddress localAddress, final ChannelPromise promise) {
-        final EventLoop eventLoop = channel.eventLoop();
-        final AddressResolver<SocketAddress> resolver = this.resolver.getResolver(eventLoop);
+        try {
+            final EventLoop eventLoop = channel.eventLoop();
+            final AddressResolver<SocketAddress> resolver = this.resolver.getResolver(eventLoop);
 
-        if (!resolver.isSupported(remoteAddress) || resolver.isResolved(remoteAddress)) {
-            // Resolver has no idea about what to do with the specified remote address or it's resolved already.
-            doConnect(remoteAddress, localAddress, promise);
-            return promise;
-        }
-
-        final Future<SocketAddress> resolveFuture = resolver.resolve(remoteAddress);
-
-        if (resolveFuture.isDone()) {
-            final Throwable resolveFailureCause = resolveFuture.cause();
-
-            if (resolveFailureCause != null) {
-                // Failed to resolve immediately
-                channel.close();
-                promise.setFailure(resolveFailureCause);
-            } else {
-                // Succeeded to resolve immediately; cached? (or did a blocking lookup)
-                doConnect(resolveFuture.getNow(), localAddress, promise);
+            if (!resolver.isSupported(remoteAddress) || resolver.isResolved(remoteAddress)) {
+                // Resolver has no idea about what to do with the specified remote address or it's resolved already.
+                doConnect(remoteAddress, localAddress, promise);
+                return promise;
             }
-            return promise;
-        }
 
-        // Wait until the name resolution is finished.
-        resolveFuture.addListener(new FutureListener<SocketAddress>() {
-            @Override
-            public void operationComplete(Future<SocketAddress> future) throws Exception {
-                if (future.cause() != null) {
+            final Future<SocketAddress> resolveFuture = resolver.resolve(remoteAddress);
+
+            if (resolveFuture.isDone()) {
+                final Throwable resolveFailureCause = resolveFuture.cause();
+
+                if (resolveFailureCause != null) {
+                    // Failed to resolve immediately
                     channel.close();
-                    promise.setFailure(future.cause());
+                    promise.setFailure(resolveFailureCause);
                 } else {
-                    doConnect(future.getNow(), localAddress, promise);
+                    // Succeeded to resolve immediately; cached? (or did a blocking lookup)
+                    doConnect(resolveFuture.getNow(), localAddress, promise);
                 }
+                return promise;
             }
-        });
 
+            // Wait until the name resolution is finished.
+            resolveFuture.addListener(new FutureListener<SocketAddress>() {
+                @Override
+                public void operationComplete(Future<SocketAddress> future) throws Exception {
+                    if (future.cause() != null) {
+                        channel.close();
+                        promise.setFailure(future.cause());
+                    } else {
+                        doConnect(future.getNow(), localAddress, promise);
+                    }
+                }
+            });
+        } catch (Throwable cause) {
+            promise.tryFailure(cause);
+        }
         return promise;
     }
 
@@ -241,7 +245,7 @@ public class Bootstrap extends AbstractBootstrap<Bootstrap, Channel> {
         // This method is invoked before channelRegistered() is triggered.  Give user handlers a chance to set up
         // the pipeline in its channelRegistered() implementation.
         final Channel channel = connectPromise.channel();
-        channel.eventLoop().execute(new OneTimeTask() {
+        channel.eventLoop().execute(new Runnable() {
             @Override
             public void run() {
                 if (localAddress == null) {
@@ -262,15 +266,7 @@ public class Bootstrap extends AbstractBootstrap<Bootstrap, Channel> {
 
         final Map<ChannelOption<?>, Object> options = options0();
         synchronized (options) {
-            for (Entry<ChannelOption<?>, Object> e: options.entrySet()) {
-                try {
-                    if (!channel.config().setOption((ChannelOption<Object>) e.getKey(), e.getValue())) {
-                        logger.warn("Unknown channel option: " + e);
-                    }
-                } catch (Throwable t) {
-                    logger.warn("Failed to set a channel option: " + channel, t);
-                }
-            }
+            setChannelOptions(channel, options, logger);
         }
 
         final Map<AttributeKey<?>, Object> attrs = attrs0();

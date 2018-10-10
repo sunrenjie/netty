@@ -15,25 +15,17 @@
  */
 package io.netty.util;
 
-import io.netty.util.internal.PlatformDependent;
-
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+
+import static io.netty.util.internal.ObjectUtil.checkPositive;
 
 /**
  * Abstract base class for classes wants to implement {@link ReferenceCounted}.
  */
 public abstract class AbstractReferenceCounted implements ReferenceCounted {
 
-    private static final AtomicIntegerFieldUpdater<AbstractReferenceCounted> refCntUpdater;
-
-    static {
-        AtomicIntegerFieldUpdater<AbstractReferenceCounted> updater =
-                PlatformDependent.newAtomicIntegerFieldUpdater(AbstractReferenceCounted.class, "refCnt");
-        if (updater == null) {
-            updater = AtomicIntegerFieldUpdater.newUpdater(AbstractReferenceCounted.class, "refCnt");
-        }
-        refCntUpdater = updater;
-    }
+    private static final AtomicIntegerFieldUpdater<AbstractReferenceCounted> refCntUpdater =
+            AtomicIntegerFieldUpdater.newUpdater(AbstractReferenceCounted.class, "refCnt");
 
     private volatile int refCnt = 1;
 
@@ -46,43 +38,25 @@ public abstract class AbstractReferenceCounted implements ReferenceCounted {
      * An unsafe operation intended for use by a subclass that sets the reference count of the buffer directly
      */
     protected final void setRefCnt(int refCnt) {
-        this.refCnt = refCnt;
+        refCntUpdater.set(this, refCnt);
     }
 
     @Override
     public ReferenceCounted retain() {
-        for (;;) {
-            int refCnt = this.refCnt;
-            if (refCnt == 0) {
-                throw new IllegalReferenceCountException(0, 1);
-            }
-            if (refCnt == Integer.MAX_VALUE) {
-                throw new IllegalReferenceCountException(Integer.MAX_VALUE, 1);
-            }
-            if (refCntUpdater.compareAndSet(this, refCnt, refCnt + 1)) {
-                break;
-            }
-        }
-        return this;
+        return retain0(1);
     }
 
     @Override
     public ReferenceCounted retain(int increment) {
-        if (increment <= 0) {
-            throw new IllegalArgumentException("increment: " + increment + " (expected: > 0)");
-        }
+        return retain0(checkPositive(increment, "increment"));
+    }
 
-        for (;;) {
-            int refCnt = this.refCnt;
-            if (refCnt == 0) {
-                throw new IllegalReferenceCountException(0, 1);
-            }
-            if (refCnt > Integer.MAX_VALUE - increment) {
-                throw new IllegalReferenceCountException(refCnt, increment);
-            }
-            if (refCntUpdater.compareAndSet(this, refCnt, refCnt + increment)) {
-                break;
-            }
+    private ReferenceCounted retain0(int increment) {
+        int oldRef = refCntUpdater.getAndAdd(this, increment);
+        if (oldRef <= 0 || oldRef + increment < oldRef) {
+            // Ensure we don't resurrect (which means the refCnt was 0) and also that we encountered an overflow.
+            refCntUpdater.getAndAdd(this, -increment);
+            throw new IllegalReferenceCountException(oldRef, increment);
         }
         return this;
     }
@@ -94,42 +68,25 @@ public abstract class AbstractReferenceCounted implements ReferenceCounted {
 
     @Override
     public boolean release() {
-        for (;;) {
-            int refCnt = this.refCnt;
-            if (refCnt == 0) {
-                throw new IllegalReferenceCountException(0, -1);
-            }
-
-            if (refCntUpdater.compareAndSet(this, refCnt, refCnt - 1)) {
-                if (refCnt == 1) {
-                    deallocate();
-                    return true;
-                }
-                return false;
-            }
-        }
+        return release0(1);
     }
 
     @Override
     public boolean release(int decrement) {
-        if (decrement <= 0) {
-            throw new IllegalArgumentException("decrement: " + decrement + " (expected: > 0)");
-        }
+        return release0(checkPositive(decrement, "decrement"));
+    }
 
-        for (;;) {
-            int refCnt = this.refCnt;
-            if (refCnt < decrement) {
-                throw new IllegalReferenceCountException(refCnt, -decrement);
-            }
-
-            if (refCntUpdater.compareAndSet(this, refCnt, refCnt - decrement)) {
-                if (refCnt == decrement) {
-                    deallocate();
-                    return true;
-                }
-                return false;
-            }
+    private boolean release0(int decrement) {
+        int oldRef = refCntUpdater.getAndAdd(this, -decrement);
+        if (oldRef == decrement) {
+            deallocate();
+            return true;
+        } else if (oldRef < decrement || oldRef - decrement > oldRef) {
+            // Ensure we don't over-release, and avoid underflow.
+            refCntUpdater.getAndAdd(this, decrement);
+            throw new IllegalReferenceCountException(oldRef, -decrement);
         }
+        return false;
     }
 
     /**

@@ -21,7 +21,6 @@ import gnu.io.SerialPort;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.oio.OioByteStreamChannel;
-import io.netty.util.internal.OneTimeTask;
 
 import java.net.SocketAddress;
 import java.util.concurrent.TimeUnit;
@@ -37,7 +36,10 @@ import static io.netty.channel.rxtx.RxtxChannelOption.WAIT_TIME;
 
 /**
  * A channel to a serial device using the RXTX library.
+ *
+ * @deprecated this transport will be removed in the next major version.
  */
+@Deprecated
 public class RxtxChannel extends OioByteStreamChannel {
 
     private static final RxtxDeviceAddress LOCAL_ADDRESS = new RxtxDeviceAddress("localhost");
@@ -162,7 +164,7 @@ public class RxtxChannel extends OioByteStreamChannel {
 
                 int waitTime = config().getOption(WAIT_TIME);
                 if (waitTime > 0) {
-                    eventLoop().schedule(new OneTimeTask() {
+                    eventLoop().schedule(new Runnable() {
                         @Override
                         public void run() {
                             try {

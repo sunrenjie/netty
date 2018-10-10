@@ -49,7 +49,10 @@ import io.netty.channel.WriteBufferWaterMark;
  * <td>{@link RxtxChannelOption#WAIT_TIME}</td><td>{@link #setWaitTimeMillis(int)}</td>
  * </tr>
  * </table>
+ *
+ * @deprecated this transport will be removed in the next major version.
  */
+@Deprecated
 public interface RxtxChannelConfig extends ChannelConfig {
     enum Stopbits {
         /**
@@ -264,7 +267,7 @@ public interface RxtxChannelConfig extends ChannelConfig {
     /**
      * Sets the maximal time (in ms) to block while try to read from the serial port. Default is 1000ms
      */
-    RxtxChannelConfig setReadTimeout(int readTimout);
+    RxtxChannelConfig setReadTimeout(int readTimeout);
 
     /**
      * Return the maximal time (in ms) to block and wait for something to be ready to read.
@@ -294,11 +297,9 @@ public interface RxtxChannelConfig extends ChannelConfig {
     RxtxChannelConfig setAutoClose(boolean autoClose);
 
     @Override
-    @Deprecated
     RxtxChannelConfig setWriteBufferHighWaterMark(int writeBufferHighWaterMark);
 
     @Override
-    @Deprecated
     RxtxChannelConfig setWriteBufferLowWaterMark(int writeBufferLowWaterMark);
 
     @Override

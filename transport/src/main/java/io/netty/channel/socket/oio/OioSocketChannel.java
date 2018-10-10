@@ -19,13 +19,15 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelException;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.ConnectTimeoutException;
 import io.netty.channel.EventLoop;
 import io.netty.channel.oio.OioByteStreamChannel;
 import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.channel.socket.SocketChannel;
-import io.netty.util.internal.OneTimeTask;
+import io.netty.util.internal.SocketUtils;
+import io.netty.util.internal.UnstableApi;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -128,6 +130,12 @@ public class OioSocketChannel extends OioByteStreamChannel implements SocketChan
         return socket.isInputShutdown() && socket.isOutputShutdown() || !isActive();
     }
 
+    @UnstableApi
+    @Override
+    protected final void doShutdownOutput() throws Exception {
+        shutdownOutput0();
+    }
+
     @Override
     public ChannelFuture shutdownOutput() {
         return shutdownOutput(newPromise());
@@ -161,7 +169,7 @@ public class OioSocketChannel extends OioByteStreamChannel implements SocketChan
         if (loop.inEventLoop()) {
             shutdownOutput0(promise);
         } else {
-            loop.execute(new OneTimeTask() {
+            loop.execute(new Runnable() {
                 @Override
                 public void run() {
                     shutdownOutput0(promise);
@@ -173,11 +181,15 @@ public class OioSocketChannel extends OioByteStreamChannel implements SocketChan
 
     private void shutdownOutput0(ChannelPromise promise) {
         try {
-            socket.shutdownOutput();
+            shutdownOutput0();
             promise.setSuccess();
         } catch (Throwable t) {
             promise.setFailure(t);
         }
+    }
+
+    private void shutdownOutput0() throws IOException {
+        socket.shutdownOutput();
     }
 
     @Override
@@ -186,7 +198,7 @@ public class OioSocketChannel extends OioByteStreamChannel implements SocketChan
         if (loop.inEventLoop()) {
             shutdownInput0(promise);
         } else {
-            loop.execute(new OneTimeTask() {
+            loop.execute(new Runnable() {
                 @Override
                 public void run() {
                     shutdownInput0(promise);
@@ -207,42 +219,49 @@ public class OioSocketChannel extends OioByteStreamChannel implements SocketChan
 
     @Override
     public ChannelFuture shutdown(final ChannelPromise promise) {
-        EventLoop loop = eventLoop();
-        if (loop.inEventLoop()) {
-            shutdown0(promise);
+        ChannelFuture shutdownOutputFuture = shutdownOutput();
+        if (shutdownOutputFuture.isDone()) {
+            shutdownOutputDone(shutdownOutputFuture, promise);
         } else {
-            loop.execute(new OneTimeTask() {
+            shutdownOutputFuture.addListener(new ChannelFutureListener() {
                 @Override
-                public void run() {
-                    shutdown0(promise);
+                public void operationComplete(final ChannelFuture shutdownOutputFuture) throws Exception {
+                    shutdownOutputDone(shutdownOutputFuture, promise);
                 }
             });
         }
         return promise;
     }
 
-    private void shutdown0(ChannelPromise promise) {
-        Throwable cause = null;
-        try {
-            socket.shutdownOutput();
-        } catch (Throwable t) {
-            cause = t;
-        }
-        try {
-            socket.shutdownInput();
-        } catch (Throwable t) {
-            if (cause == null) {
-                promise.setFailure(t);
-            } else {
-                logger.debug("Exception suppressed because a previous exception occurred.", t);
-                promise.setFailure(cause);
-            }
-            return;
-        }
-        if (cause == null) {
-            promise.setSuccess();
+    private void shutdownOutputDone(final ChannelFuture shutdownOutputFuture, final ChannelPromise promise) {
+        ChannelFuture shutdownInputFuture = shutdownInput();
+        if (shutdownInputFuture.isDone()) {
+            shutdownDone(shutdownOutputFuture, shutdownInputFuture, promise);
         } else {
-            promise.setFailure(cause);
+            shutdownInputFuture.addListener(new ChannelFutureListener() {
+                @Override
+                public void operationComplete(ChannelFuture shutdownInputFuture) throws Exception {
+                    shutdownDone(shutdownOutputFuture, shutdownInputFuture, promise);
+                }
+            });
+        }
+    }
+
+    private static void shutdownDone(ChannelFuture shutdownOutputFuture,
+                                     ChannelFuture shutdownInputFuture,
+                                     ChannelPromise promise) {
+        Throwable shutdownOutputCause = shutdownOutputFuture.cause();
+        Throwable shutdownInputCause = shutdownInputFuture.cause();
+        if (shutdownOutputCause != null) {
+            if (shutdownInputCause != null) {
+                logger.debug("Exception suppressed because a previous exception occurred.",
+                        shutdownInputCause);
+            }
+            promise.setFailure(shutdownOutputCause);
+        } else if (shutdownInputCause != null) {
+            promise.setFailure(shutdownInputCause);
+        } else {
+            promise.setSuccess();
         }
     }
 
@@ -268,19 +287,19 @@ public class OioSocketChannel extends OioByteStreamChannel implements SocketChan
 
     @Override
     protected void doBind(SocketAddress localAddress) throws Exception {
-        socket.bind(localAddress);
+        SocketUtils.bind(socket, localAddress);
     }
 
     @Override
     protected void doConnect(SocketAddress remoteAddress,
             SocketAddress localAddress) throws Exception {
         if (localAddress != null) {
-            socket.bind(localAddress);
+            SocketUtils.bind(socket, localAddress);
         }
 
         boolean success = false;
         try {
-            socket.connect(remoteAddress, config().getConnectTimeoutMillis());
+            SocketUtils.connect(socket, remoteAddress, config().getConnectTimeoutMillis());
             activate(socket.getInputStream(), socket.getOutputStream());
             success = true;
         } catch (SocketTimeoutException e) {

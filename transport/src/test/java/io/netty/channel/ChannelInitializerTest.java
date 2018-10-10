@@ -17,6 +17,7 @@ package io.netty.channel;
 
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.channel.local.LocalAddress;
 import io.netty.channel.local.LocalChannel;
 import io.netty.channel.local.LocalServerChannel;
@@ -24,10 +25,17 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.util.Iterator;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertSame;
 
 public class ChannelInitializerTest {
     private static final int TIMEOUT_MILLIS = 1000;
@@ -56,6 +64,126 @@ public class ChannelInitializerTest {
         group.shutdownGracefully(0, TIMEOUT_MILLIS, TimeUnit.MILLISECONDS).syncUninterruptibly();
     }
 
+    @Test
+    public void testInitChannelThrowsRegisterFirst() {
+        testInitChannelThrows(true);
+    }
+
+    @Test
+    public void testInitChannelThrowsRegisterAfter() {
+        testInitChannelThrows(false);
+    }
+
+    private void testInitChannelThrows(boolean registerFirst) {
+        final Exception exception = new Exception();
+        final AtomicReference<Throwable> causeRef = new AtomicReference<Throwable>();
+
+        ChannelPipeline pipeline = new LocalChannel().pipeline();
+
+        if (registerFirst) {
+            group.register(pipeline.channel()).syncUninterruptibly();
+        }
+        pipeline.addFirst(new ChannelInitializer<Channel>() {
+            @Override
+            protected void initChannel(Channel ch) throws Exception {
+                throw exception;
+            }
+
+            @Override
+            public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+                causeRef.set(cause);
+                super.exceptionCaught(ctx, cause);
+            }
+        });
+
+        if (!registerFirst) {
+            group.register(pipeline.channel()).syncUninterruptibly();
+        }
+        pipeline.channel().close().syncUninterruptibly();
+        pipeline.channel().closeFuture().syncUninterruptibly();
+
+        assertSame(exception, causeRef.get());
+    }
+
+    @Test
+    public void testChannelInitializerInInitializerCorrectOrdering() {
+        final ChannelInboundHandlerAdapter handler1 = new ChannelInboundHandlerAdapter();
+        final ChannelInboundHandlerAdapter handler2 = new ChannelInboundHandlerAdapter();
+        final ChannelInboundHandlerAdapter handler3 = new ChannelInboundHandlerAdapter();
+        final ChannelInboundHandlerAdapter handler4 = new ChannelInboundHandlerAdapter();
+
+        client.handler(new ChannelInitializer<Channel>() {
+            @Override
+            protected void initChannel(Channel ch) throws Exception {
+                ch.pipeline().addLast(handler1);
+                ch.pipeline().addLast(new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel ch) throws Exception {
+                        ch.pipeline().addLast(handler2);
+                        ch.pipeline().addLast(handler3);
+                    }
+                });
+                ch.pipeline().addLast(handler4);
+            }
+        }).localAddress(LocalAddress.ANY);
+
+        Channel channel = client.bind().syncUninterruptibly().channel();
+        try {
+            // Execute some task on the EventLoop and wait until its done to be sure all handlers are added to the
+            // pipeline.
+            channel.eventLoop().submit(new Runnable() {
+                @Override
+                public void run() {
+                    // NOOP
+                }
+            }).syncUninterruptibly();
+            Iterator<Map.Entry<String, ChannelHandler>> handlers = channel.pipeline().iterator();
+            assertSame(handler1, handlers.next().getValue());
+            assertSame(handler2, handlers.next().getValue());
+            assertSame(handler3, handlers.next().getValue());
+            assertSame(handler4, handlers.next().getValue());
+            assertFalse(handlers.hasNext());
+        } finally {
+            channel.close().syncUninterruptibly();
+        }
+    }
+
+    @Test
+    public void testChannelInitializerReentrance() {
+        final AtomicInteger registeredCalled = new AtomicInteger(0);
+        final ChannelInboundHandlerAdapter handler1 = new ChannelInboundHandlerAdapter() {
+            @Override
+            public void channelRegistered(ChannelHandlerContext ctx) throws Exception {
+                registeredCalled.incrementAndGet();
+            }
+        };
+        final AtomicInteger initChannelCalled = new AtomicInteger(0);
+        client.handler(new ChannelInitializer<Channel>() {
+            @Override
+            protected void initChannel(Channel ch) throws Exception {
+                initChannelCalled.incrementAndGet();
+                ch.pipeline().addLast(handler1);
+                ch.pipeline().fireChannelRegistered();
+            }
+        }).localAddress(LocalAddress.ANY);
+
+        Channel channel = client.bind().syncUninterruptibly().channel();
+        try {
+            // Execute some task on the EventLoop and wait until its done to be sure all handlers are added to the
+            // pipeline.
+            channel.eventLoop().submit(new Runnable() {
+                @Override
+                public void run() {
+                    // NOOP
+                }
+            }).syncUninterruptibly();
+            assertEquals(1, initChannelCalled.get());
+            assertEquals(2, registeredCalled.get());
+        } finally {
+            channel.close().syncUninterruptibly();
+        }
+    }
+
     @Test(timeout = TIMEOUT_MILLIS)
     public void firstHandlerInPipelineShouldReceiveChannelRegisteredEvent() {
         testChannelRegisteredEventPropagation(new ChannelInitializer<LocalChannel>() {
@@ -74,6 +202,38 @@ public class ChannelInitializerTest {
                 channel.pipeline().addLast(testHandler);
             }
         });
+    }
+
+    @Test
+    public void testAddFirstChannelInitializer() {
+        testAddChannelInitializer(true);
+    }
+
+    @Test
+    public void testAddLastChannelInitializer() {
+        testAddChannelInitializer(false);
+    }
+
+    private static void testAddChannelInitializer(final boolean first) {
+        final AtomicBoolean called = new AtomicBoolean();
+        EmbeddedChannel channel = new EmbeddedChannel(new ChannelInitializer<Channel>() {
+            @Override
+            protected void initChannel(Channel ch) throws Exception {
+                ChannelHandler handler = new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel ch) throws Exception {
+                        called.set(true);
+                    }
+                };
+                if (first) {
+                    ch.pipeline().addFirst(handler);
+                } else {
+                    ch.pipeline().addLast(handler);
+                }
+            }
+        });
+        channel.finish();
+        assertTrue(called.get());
     }
 
     private void testChannelRegisteredEventPropagation(ChannelInitializer<LocalChannel> init) {

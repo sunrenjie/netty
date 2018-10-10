@@ -17,7 +17,7 @@ package io.netty.buffer;
 
 import io.netty.util.internal.PlatformDependent;
 
-final class UnpooledUnsafeHeapByteBuf extends UnpooledHeapByteBuf {
+class UnpooledUnsafeHeapByteBuf extends UnpooledHeapByteBuf {
 
     /**
      * Creates a new heap buffer with a newly allocated byte array.
@@ -27,6 +27,11 @@ final class UnpooledUnsafeHeapByteBuf extends UnpooledHeapByteBuf {
      */
     UnpooledUnsafeHeapByteBuf(ByteBufAllocator alloc, int initialCapacity, int maxCapacity) {
         super(alloc, initialCapacity, maxCapacity);
+    }
+
+    @Override
+    protected byte[] allocateArray(int initialCapacity) {
+        return PlatformDependent.allocateUninitializedArray(initialCapacity);
     }
 
     @Override
@@ -234,6 +239,30 @@ final class UnpooledUnsafeHeapByteBuf extends UnpooledHeapByteBuf {
     @Override
     protected void _setLongLE(int index, long value) {
         UnsafeByteBufUtil.setLongLE(array, index, value);
+    }
+
+    @Override
+    public ByteBuf setZero(int index, int length) {
+        if (PlatformDependent.javaVersion() >= 7) {
+            // Only do on java7+ as the needed Unsafe call was only added there.
+            checkIndex(index, length);
+            UnsafeByteBufUtil.setZero(array, index, length);
+            return this;
+        }
+        return super.setZero(index, length);
+    }
+
+    @Override
+    public ByteBuf writeZero(int length) {
+        if (PlatformDependent.javaVersion() >= 7) {
+            // Only do on java7+ as the needed Unsafe call was only added there.
+            ensureWritable(length);
+            int wIndex = writerIndex;
+            UnsafeByteBufUtil.setZero(array, wIndex, length);
+            writerIndex = wIndex + length;
+            return this;
+        }
+        return super.writeZero(length);
     }
 
     @Override

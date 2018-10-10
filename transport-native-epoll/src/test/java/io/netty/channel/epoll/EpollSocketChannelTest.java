@@ -16,28 +16,13 @@
 package io.netty.channel.epoll;
 
 import io.netty.bootstrap.Bootstrap;
-import io.netty.bootstrap.ServerBootstrap;
-import io.netty.buffer.Unpooled;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
-import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.ServerChannel;
-import io.netty.util.ReferenceCountUtil;
 import org.junit.Assert;
 import org.junit.Test;
 
 import java.net.InetSocketAddress;
-import java.net.SocketAddress;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
-
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
 
 public class EpollSocketChannelTest {
 
@@ -113,5 +98,23 @@ public class EpollSocketChannelTest {
         Assert.assertTrue(info.rcvRtt() >= 0);
         Assert.assertTrue(info.rcvSpace() >= 0);
         Assert.assertTrue(info.totalRetrans() >= 0);
+    }
+
+    // See https://github.com/netty/netty/issues/7159
+    @Test
+    public void testSoLingerNoAssertError() throws Exception {
+        EventLoopGroup group = new EpollEventLoopGroup(1);
+
+        try {
+            Bootstrap bootstrap = new Bootstrap();
+            EpollSocketChannel ch = (EpollSocketChannel) bootstrap.group(group)
+                    .channel(EpollSocketChannel.class)
+                    .option(ChannelOption.SO_LINGER, 10)
+                    .handler(new ChannelInboundHandlerAdapter())
+                    .bind(new InetSocketAddress(0)).syncUninterruptibly().channel();
+            ch.close().syncUninterruptibly();
+        } finally {
+            group.shutdownGracefully();
+        }
     }
 }

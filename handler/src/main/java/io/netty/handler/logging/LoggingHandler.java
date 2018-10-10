@@ -226,9 +226,17 @@ public class LoggingHandler extends ChannelDuplexHandler {
     }
 
     @Override
+    public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
+        if (logger.isEnabled(internalLevel)) {
+            logger.log(internalLevel, format(ctx, "READ COMPLETE"));
+        }
+        ctx.fireChannelReadComplete();
+    }
+
+    @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (logger.isEnabled(internalLevel)) {
-            logger.log(internalLevel, format(ctx, "RECEIVED", msg));
+            logger.log(internalLevel, format(ctx, "READ", msg));
         }
         ctx.fireChannelRead(msg);
     }
@@ -239,6 +247,14 @@ public class LoggingHandler extends ChannelDuplexHandler {
             logger.log(internalLevel, format(ctx, "WRITE", msg));
         }
         ctx.write(msg, promise);
+    }
+
+    @Override
+    public void channelWritabilityChanged(ChannelHandlerContext ctx) throws Exception {
+        if (logger.isEnabled(internalLevel)) {
+            logger.log(internalLevel, format(ctx, "WRITABILITY CHANGED"));
+        }
+        ctx.fireChannelWritabilityChanged();
     }
 
     @Override
@@ -296,7 +312,7 @@ public class LoggingHandler extends ChannelDuplexHandler {
         String arg1Str = String.valueOf(firstArg);
         String arg2Str = secondArg.toString();
         StringBuilder buf = new StringBuilder(
-                chStr.length() + 1 + eventName + 2 + arg1Str.length() + 2 + arg2Str.length());
+                chStr.length() + 1 + eventName.length() + 2 + arg1Str.length() + 2 + arg2Str.length());
         buf.append(chStr).append(' ').append(eventName).append(": ").append(arg1Str).append(", ").append(arg2Str);
         return buf.toString();
     }

@@ -22,6 +22,7 @@ import java.nio.ByteOrder;
 import java.nio.CharBuffer;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 
@@ -38,7 +39,7 @@ import java.util.List;
  * {@link ByteBuf} heapBuffer    = buffer(128);
  * {@link ByteBuf} directBuffer  = directBuffer(256);
  * {@link ByteBuf} wrappedBuffer = wrappedBuffer(new byte[128], new byte[256]);
- * {@link ByteBuf} copiedBuffe r = copiedBuffer({@link ByteBuffer}.allocate(128));
+ * {@link ByteBuf} copiedBuffer  = copiedBuffer({@link ByteBuffer}.allocate(128));
  * </pre>
  *
  * <h3>Allocating a new buffer</h3>
@@ -183,7 +184,7 @@ public final class Unpooled {
         if (!buffer.hasRemaining()) {
             return EMPTY_BUFFER;
         }
-        if (buffer.hasArray()) {
+        if (!buffer.isDirect() && buffer.hasArray()) {
             return wrappedBuffer(
                     buffer.array(),
                     buffer.arrayOffset() + buffer.position(),
@@ -205,6 +206,14 @@ public final class Unpooled {
                 return new UnpooledDirectByteBuf(ALLOC, buffer, buffer.remaining());
             }
         }
+    }
+
+    /**
+     * Creates a new buffer which wraps the specified memory address. If {@code doFree} is true the
+     * memoryAddress will automatically be freed once the reference count of the {@link ByteBuf} reaches {@code 0}.
+     */
+    public static ByteBuf wrappedBuffer(long memoryAddress, int size, boolean doFree) {
+        return new WrappedUnpooledUnsafeDirectByteBuf(ALLOC, memoryAddress, size, doFree);
     }
 
     /**
@@ -230,7 +239,7 @@ public final class Unpooled {
      * content will be visible to the returned buffer.
      */
     public static ByteBuf wrappedBuffer(byte[]... arrays) {
-        return wrappedBuffer(AbstractByteBufAllocator.DEFAULT_MAX_COMPONENTS, arrays);
+        return wrappedBuffer(arrays.length, arrays);
     }
 
     /**
@@ -241,7 +250,7 @@ public final class Unpooled {
      * @return The readable portion of the {@code buffers}. The caller is responsible for releasing this buffer.
      */
     public static ByteBuf wrappedBuffer(ByteBuf... buffers) {
-        return wrappedBuffer(AbstractByteBufAllocator.DEFAULT_MAX_COMPONENTS, buffers);
+        return wrappedBuffer(buffers.length, buffers);
     }
 
     /**
@@ -250,7 +259,7 @@ public final class Unpooled {
      * specified buffers will be visible to the returned buffer.
      */
     public static ByteBuf wrappedBuffer(ByteBuffer... buffers) {
-        return wrappedBuffer(AbstractByteBufAllocator.DEFAULT_MAX_COMPONENTS, buffers);
+        return wrappedBuffer(buffers.length, buffers);
     }
 
     /**
@@ -309,13 +318,14 @@ public final class Unpooled {
             }
             break;
         default:
-            for (ByteBuf b: buffers) {
-                if (b.isReadable()) {
-                    return new CompositeByteBuf(ALLOC, false, maxNumComponents, buffers);
-                } else {
-                    b.release();
+            for (int i = 0; i < buffers.length; i++) {
+                ByteBuf buf = buffers[i];
+                if (buf.isReadable()) {
+                    return new CompositeByteBuf(ALLOC, false, maxNumComponents, buffers, i, buffers.length);
                 }
+                buf.release();
             }
+            break;
         }
         return EMPTY_BUFFER;
     }
@@ -872,9 +882,36 @@ public final class Unpooled {
     /**
      * Wrap the given {@link ByteBuf}s in an unmodifiable {@link ByteBuf}. Be aware the returned {@link ByteBuf} will
      * not try to slice the given {@link ByteBuf}s to reduce GC-Pressure.
+     *
+     * @deprecated Use {@link #wrappedUnmodifiableBuffer(ByteBuf...)}.
      */
+    @Deprecated
     public static ByteBuf unmodifiableBuffer(ByteBuf... buffers) {
-        return new FixedCompositeByteBuf(ALLOC, buffers);
+        return wrappedUnmodifiableBuffer(true, buffers);
+    }
+
+    /**
+     * Wrap the given {@link ByteBuf}s in an unmodifiable {@link ByteBuf}. Be aware the returned {@link ByteBuf} will
+     * not try to slice the given {@link ByteBuf}s to reduce GC-Pressure.
+     *
+     * The returned {@link ByteBuf} may wrap the provided array directly, and so should not be subsequently modified.
+     */
+    public static ByteBuf wrappedUnmodifiableBuffer(ByteBuf... buffers) {
+        return wrappedUnmodifiableBuffer(false, buffers);
+    }
+
+    private static ByteBuf wrappedUnmodifiableBuffer(boolean copy, ByteBuf... buffers) {
+        switch (buffers.length) {
+        case 0:
+            return EMPTY_BUFFER;
+        case 1:
+            return buffers[0].asReadOnly();
+        default:
+            if (copy) {
+                buffers = Arrays.copyOf(buffers, buffers.length, ByteBuf[].class);
+            }
+            return new FixedCompositeByteBuf(ALLOC, buffers);
+        }
     }
 
     private Unpooled() {

@@ -16,6 +16,7 @@
 package io.netty.handler.codec.http;
 
 import io.netty.handler.codec.CharSequenceValueConverter;
+import io.netty.handler.codec.DateFormatter;
 import io.netty.handler.codec.DefaultHeaders;
 import io.netty.handler.codec.DefaultHeaders.NameValidator;
 import io.netty.handler.codec.DefaultHeadersImpl;
@@ -276,6 +277,32 @@ public class DefaultHttpHeaders extends HttpHeaders {
     }
 
     @Override
+    public Iterator<String> valueStringIterator(CharSequence name) {
+        final Iterator<CharSequence> itr = valueCharSequenceIterator(name);
+        return new Iterator<String>() {
+            @Override
+            public boolean hasNext() {
+                return itr.hasNext();
+            }
+
+            @Override
+            public String next() {
+                return itr.next().toString();
+            }
+
+            @Override
+            public void remove() {
+                itr.remove();
+            }
+        };
+    }
+
+    @Override
+    public Iterator<CharSequence> valueCharSequenceIterator(CharSequence name) {
+        return headers.valueIterator(name);
+    }
+
+    @Override
     public boolean contains(String name) {
         return contains((CharSequence) name);
     }
@@ -312,15 +339,18 @@ public class DefaultHttpHeaders extends HttpHeaders {
 
     @Override
     public boolean equals(Object o) {
-        if (!(o instanceof DefaultHttpHeaders)) {
-            return false;
-        }
-        return headers.equals(((DefaultHttpHeaders) o).headers, CASE_SENSITIVE_HASHER);
+        return o instanceof DefaultHttpHeaders
+                && headers.equals(((DefaultHttpHeaders) o).headers, CASE_SENSITIVE_HASHER);
     }
 
     @Override
     public int hashCode() {
         return headers.hashCode(CASE_SENSITIVE_HASHER);
+    }
+
+    @Override
+    public HttpHeaders copy() {
+        return new DefaultHttpHeaders(headers.copy());
     }
 
     private static void validateHeaderNameElement(byte value) {
@@ -391,10 +421,10 @@ public class DefaultHttpHeaders extends HttpHeaders {
                 return (CharSequence) value;
             }
             if (value instanceof Date) {
-                return HttpHeaderDateFormat.get().format((Date) value);
+                return DateFormatter.format((Date) value);
             }
             if (value instanceof Calendar) {
-                return HttpHeaderDateFormat.get().format(((Calendar) value).getTime());
+                return DateFormatter.format(((Calendar) value).getTime());
             }
             return value.toString();
         }

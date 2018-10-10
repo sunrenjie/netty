@@ -34,7 +34,6 @@ import io.netty.channel.sctp.SctpChannelConfig;
 import io.netty.channel.sctp.SctpMessage;
 import io.netty.channel.sctp.SctpNotificationHandler;
 import io.netty.channel.sctp.SctpServerChannel;
-import io.netty.util.internal.OneTimeTask;
 import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.StringUtil;
 import io.netty.util.internal.logging.InternalLogger;
@@ -403,7 +402,9 @@ public class OioSctpChannel extends AbstractOioMessageChannel
         try {
             selector.close();
         } catch (IOException e) {
-            logger.warn("Failed to close a " + selectorName + " selector.", e);
+            if (logger.isWarnEnabled()) {
+                logger.warn("Failed to close a " + selectorName + " selector.", e);
+            }
         }
     }
 
@@ -422,7 +423,7 @@ public class OioSctpChannel extends AbstractOioMessageChannel
                 promise.setFailure(t);
             }
         } else {
-            eventLoop().execute(new OneTimeTask() {
+            eventLoop().execute(new Runnable() {
                 @Override
                 public void run() {
                     bindAddress(localAddress, promise);
@@ -447,7 +448,7 @@ public class OioSctpChannel extends AbstractOioMessageChannel
                 promise.setFailure(t);
             }
         } else {
-            eventLoop().execute(new OneTimeTask() {
+            eventLoop().execute(new Runnable() {
                 @Override
                 public void run() {
                     unbindAddress(localAddress, promise);

@@ -16,7 +16,6 @@
 
 package io.netty.buffer;
 
-import static io.netty.util.ReferenceCountUtil.releaseLater;
 import static org.junit.Assert.assertEquals;
 import io.netty.util.ByteProcessor;
 import io.netty.util.CharsetUtil;
@@ -26,8 +25,8 @@ import org.junit.Test;
 public class ByteProcessorTest {
     @Test
     public void testForward() {
-        final ByteBuf buf = releaseLater(
-                Unpooled.copiedBuffer("abc\r\n\ndef\r\rghi\n\njkl\0\0mno  \t\tx", CharsetUtil.ISO_8859_1));
+        final ByteBuf buf =
+                Unpooled.copiedBuffer("abc\r\n\ndef\r\rghi\n\njkl\0\0mno  \t\tx", CharsetUtil.ISO_8859_1);
         final int length = buf.readableBytes();
 
         assertEquals(3,  buf.forEachByte(0,  length, ByteProcessor.FIND_CRLF));
@@ -38,18 +37,22 @@ public class ByteProcessorTest {
         assertEquals(16, buf.forEachByte(14, length - 14, ByteProcessor.FIND_NON_LF));
         assertEquals(19, buf.forEachByte(16, length - 16, ByteProcessor.FIND_NUL));
         assertEquals(21, buf.forEachByte(19, length - 19, ByteProcessor.FIND_NON_NUL));
+        assertEquals(24, buf.forEachByte(19, length - 19, ByteProcessor.FIND_ASCII_SPACE));
         assertEquals(24, buf.forEachByte(21, length - 21, ByteProcessor.FIND_LINEAR_WHITESPACE));
         assertEquals(28, buf.forEachByte(24, length - 24, ByteProcessor.FIND_NON_LINEAR_WHITESPACE));
         assertEquals(-1, buf.forEachByte(28, length - 28, ByteProcessor.FIND_LINEAR_WHITESPACE));
+
+        buf.release();
     }
 
     @Test
     public void testBackward() {
-        final ByteBuf buf = releaseLater(
-                Unpooled.copiedBuffer("abc\r\n\ndef\r\rghi\n\njkl\0\0mno  \t\tx", CharsetUtil.ISO_8859_1));
+        final ByteBuf buf =
+                Unpooled.copiedBuffer("abc\r\n\ndef\r\rghi\n\njkl\0\0mno  \t\tx", CharsetUtil.ISO_8859_1);
         final int length = buf.readableBytes();
 
         assertEquals(27, buf.forEachByteDesc(0, length, ByteProcessor.FIND_LINEAR_WHITESPACE));
+        assertEquals(25, buf.forEachByteDesc(0, length, ByteProcessor.FIND_ASCII_SPACE));
         assertEquals(23, buf.forEachByteDesc(0, 28, ByteProcessor.FIND_NON_LINEAR_WHITESPACE));
         assertEquals(20, buf.forEachByteDesc(0, 24, ByteProcessor.FIND_NUL));
         assertEquals(18, buf.forEachByteDesc(0, 21, ByteProcessor.FIND_NON_NUL));
@@ -60,5 +63,7 @@ public class ByteProcessorTest {
         assertEquals(5,  buf.forEachByteDesc(0, 9, ByteProcessor.FIND_CRLF));
         assertEquals(2,  buf.forEachByteDesc(0, 6, ByteProcessor.FIND_NON_CRLF));
         assertEquals(-1, buf.forEachByteDesc(0, 3, ByteProcessor.FIND_CRLF));
+
+        buf.release();
     }
 }

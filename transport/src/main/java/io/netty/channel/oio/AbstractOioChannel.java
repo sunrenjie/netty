@@ -20,7 +20,6 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.EventLoop;
 import io.netty.channel.ThreadPerChannelEventLoop;
-import io.netty.util.internal.OneTimeTask;
 
 import java.net.SocketAddress;
 
@@ -69,8 +68,13 @@ public abstract class AbstractOioChannel extends AbstractChannel {
             try {
                 boolean wasActive = isActive();
                 doConnect(remoteAddress, localAddress);
+
+                // Get the state as trySuccess() may trigger an ChannelFutureListener that will close the Channel.
+                // We still need to ensure we call fireChannelActive() in this case.
+                boolean active = isActive();
+
                 safeSetSuccess(promise);
-                if (!wasActive && isActive()) {
+                if (!wasActive && active) {
                     pipeline().fireChannelActive();
                 }
             } catch (Throwable t) {
@@ -123,7 +127,7 @@ public abstract class AbstractOioChannel extends AbstractChannel {
             if (eventLoop.inEventLoop()) {
                 this.readPending = readPending;
             } else {
-                eventLoop.execute(new OneTimeTask() {
+                eventLoop.execute(new Runnable() {
                     @Override
                     public void run() {
                         AbstractOioChannel.this.readPending = readPending;

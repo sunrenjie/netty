@@ -58,11 +58,11 @@ public class Http2EventAdapter implements Http2Connection.Listener, Http2FrameLi
     }
 
     @Override
-    public void onPingRead(ChannelHandlerContext ctx, ByteBuf data) throws Http2Exception {
+    public void onPingRead(ChannelHandlerContext ctx, long data) throws Http2Exception {
     }
 
     @Override
-    public void onPingAckRead(ChannelHandlerContext ctx, ByteBuf data) throws Http2Exception {
+    public void onPingAckRead(ChannelHandlerContext ctx, long data) throws Http2Exception {
     }
 
     @Override
@@ -82,7 +82,7 @@ public class Http2EventAdapter implements Http2Connection.Listener, Http2FrameLi
 
     @Override
     public void onUnknownFrame(ChannelHandlerContext ctx, byte frameType, int streamId, Http2Flags flags,
-            ByteBuf payload) {
+            ByteBuf payload) throws Http2Exception {
     }
 
     @Override
@@ -103,18 +103,6 @@ public class Http2EventAdapter implements Http2Connection.Listener, Http2FrameLi
 
     @Override
     public void onStreamRemoved(Http2Stream stream) {
-    }
-
-    @Override
-    public void onPriorityTreeParentChanged(Http2Stream stream, Http2Stream oldParent) {
-    }
-
-    @Override
-    public void onPriorityTreeParentChanging(Http2Stream stream, Http2Stream newParent) {
-    }
-
-    @Override
-    public void onWeightChanged(Http2Stream stream, short oldWeight) {
     }
 
     @Override

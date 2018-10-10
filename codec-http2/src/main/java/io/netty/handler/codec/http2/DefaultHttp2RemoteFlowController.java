@@ -15,8 +15,6 @@
 package io.netty.handler.codec.http2;
 
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.handler.codec.http2.StreamByteDistributor.Writer;
-import io.netty.util.BooleanSupplier;
 import io.netty.util.internal.UnstableApi;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -25,8 +23,11 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 
 import static io.netty.handler.codec.http2.Http2CodecUtil.DEFAULT_WINDOW_SIZE;
+import static io.netty.handler.codec.http2.Http2CodecUtil.MAX_WEIGHT;
+import static io.netty.handler.codec.http2.Http2CodecUtil.MIN_WEIGHT;
 import static io.netty.handler.codec.http2.Http2Error.FLOW_CONTROL_ERROR;
 import static io.netty.handler.codec.http2.Http2Error.INTERNAL_ERROR;
+import static io.netty.handler.codec.http2.Http2Error.STREAM_CLOSED;
 import static io.netty.handler.codec.http2.Http2Exception.streamError;
 import static io.netty.handler.codec.http2.Http2Stream.State.HALF_CLOSED_LOCAL;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
@@ -100,12 +101,12 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
             public void onStreamClosed(Http2Stream stream) {
                 // Any pending frames can never be written, cancel and
                 // write errors for any pending frames.
-                state(stream).cancel();
+                state(stream).cancel(STREAM_CLOSED, null);
             }
 
             @Override
             public void onStreamHalfClosed(Http2Stream stream) {
-                if (HALF_CLOSED_LOCAL.equals(stream.state())) {
+                if (HALF_CLOSED_LOCAL == stream.state()) {
                     /**
                      * When this method is called there should not be any
                      * pending frames left if the API is used correctly. However,
@@ -117,7 +118,7 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
                      *
                      * This is to cancel any such illegal writes.
                      */
-                    state(stream).cancel();
+                    state(stream).cancel(STREAM_CLOSED, null);
                 }
             }
         });
@@ -174,6 +175,16 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
     @Override
     public void channelWritabilityChanged() throws Http2Exception {
         monitor.channelWritabilityChange();
+    }
+
+    @Override
+    public void updateDependencyTree(int childStreamId, int parentStreamId, short weight, boolean exclusive) {
+        // It is assumed there are all validated at a higher level. For example in the Http2FrameReader.
+        assert weight >= MIN_WEIGHT && weight <= MAX_WEIGHT : "Invalid weight";
+        assert childStreamId != parentStreamId : "A stream cannot depend on itself";
+        assert childStreamId > 0 && parentStreamId >= 0 : "childStreamId must be > 0. parentStreamId must be >= 0.";
+
+        streamByteDistributor.updateDependencyTree(childStreamId, parentStreamId, weight, exclusive);
     }
 
     private boolean isChannelWritable() {
@@ -234,12 +245,12 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
     }
 
     private int maxUsableChannelBytes() {
-        // If the channel isWritable, allow at least minUseableChannelBytes.
+        // If the channel isWritable, allow at least minUsableChannelBytes.
         int channelWritableBytes = (int) min(Integer.MAX_VALUE, ctx.channel().bytesBeforeUnwritable());
-        int useableBytes = channelWritableBytes > 0 ? max(channelWritableBytes, minUsableChannelBytes()) : 0;
+        int usableBytes = channelWritableBytes > 0 ? max(channelWritableBytes, minUsableChannelBytes()) : 0;
 
         // Clip the usable bytes by the connection window.
-        return min(connectionState.windowSize(), useableBytes);
+        return min(connectionState.windowSize(), usableBytes);
     }
 
     /**
@@ -262,7 +273,7 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
         private final Http2Stream stream;
         private final Deque<FlowControlled> pendingWriteQueue;
         private int window;
-        private int pendingBytes;
+        private long pendingBytes;
         private boolean markedWritable;
 
         /**
@@ -273,12 +284,6 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
          * Set to true if cancel() was called.
          */
         private boolean cancelled;
-        private BooleanSupplier isWritableSupplier = new BooleanSupplier() {
-            @Override
-            public boolean get() throws Exception {
-                return windowSize() - pendingBytes() > 0;
-            }
-        };
 
         FlowState(Http2Stream stream) {
             this.stream = stream;
@@ -290,11 +295,7 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
          * @return {@code true} if the stream associated with this object is writable.
          */
         boolean isWritable() {
-            try {
-                return isWritableSupplier.get();
-            } catch (Throwable cause) {
-                throw new Error("isWritableSupplier should never throw!", cause);
-            }
+            return windowSize() > pendingBytes() && !cancelled;
         }
 
         /**
@@ -392,7 +393,7 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
                 // If a cancellation occurred while writing, call cancel again to
                 // clear and error all of the pending writes.
                 if (cancelled) {
-                    cancel(cause);
+                    cancel(INTERNAL_ERROR, cause);
                 }
             }
             return writtenBytes;
@@ -420,7 +421,7 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
         }
 
         @Override
-        public int pendingBytes() {
+        public long pendingBytes() {
             return pendingBytes;
         }
 
@@ -455,42 +456,37 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
         }
 
         /**
-         * Returns the the head of the pending queue, or {@code null} if empty.
+         * Returns the head of the pending queue, or {@code null} if empty.
          */
         private FlowControlled peek() {
             return pendingWriteQueue.peek();
         }
 
         /**
-         * Any operations that may be pending are cleared and the status of these operations is failed.
-         */
-        void cancel() {
-            cancel(null);
-        }
-
-        /**
          * Clears the pending queue and writes errors for each remaining frame.
+         * @param error the {@link Http2Error} to use.
          * @param cause the {@link Throwable} that caused this method to be invoked.
          */
-        private void cancel(Throwable cause) {
+        void cancel(Http2Error error, Throwable cause) {
             cancelled = true;
             // Ensure that the queue can't be modified while we are writing.
             if (writing) {
                 return;
             }
 
-            for (;;) {
-                FlowControlled frame = pendingWriteQueue.poll();
-                if (frame == null) {
-                    break;
-                }
-                writeError(frame, streamError(stream.id(), INTERNAL_ERROR, cause,
-                                              "Stream closed before write could take place"));
+            FlowControlled frame = pendingWriteQueue.poll();
+            if (frame != null) {
+                // Only create exception once and reuse to reduce overhead of filling in the stacktrace.
+                final Http2Exception exception = streamError(stream.id(), error, cause,
+                        "Stream closed before write could take place");
+                do {
+                    writeError(frame, exception);
+                    frame = pendingWriteQueue.poll();
+                } while (frame != null);
             }
 
             streamByteDistributor.updateStreamableBytes(this);
 
-            isWritableSupplier = BooleanSupplier.FALSE_SUPPLIER;
             monitor.stateCancelled(this);
         }
 
@@ -541,14 +537,14 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
     /**
      * Abstract class which provides common functionality for writability monitor implementations.
      */
-    private class WritabilityMonitor {
+    private class WritabilityMonitor implements StreamByteDistributor.Writer {
+        private boolean inWritePendingBytes;
         private long totalPendingBytes;
-        private final Writer writer = new StreamByteDistributor.Writer() {
-            @Override
-            public void write(Http2Stream stream, int numBytes) {
-                state(stream).writeAllocatedBytes(numBytes);
-            }
-        };
+
+        @Override
+        public final void write(Http2Stream stream, int numBytes) {
+            state(stream).writeAllocatedBytes(numBytes);
+        }
 
         /**
          * Called when the writability of the underlying channel changes.
@@ -613,16 +609,28 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
         }
 
         final void writePendingBytes() throws Http2Exception {
-            int bytesToWrite = writableBytes();
-
-            // Make sure we always write at least once, regardless if we have bytesToWrite or not.
-            // This ensures that zero-length frames will always be written.
-            for (;;) {
-                if (!streamByteDistributor.distribute(bytesToWrite, writer) ||
-                    (bytesToWrite = writableBytes()) <= 0 ||
-                    !isChannelWritable0()) {
-                    break;
+            // Reentry is not permitted during the byte distribution process. It may lead to undesirable distribution of
+            // bytes and even infinite loops. We protect against reentry and make sure each call has an opportunity to
+            // cause a distribution to occur. This may be useful for example if the channel's writability changes from
+            // Writable -> Not Writable (because we are writing) -> Writable (because the user flushed to make more room
+            // in the channel outbound buffer).
+            if (inWritePendingBytes) {
+                return;
+            }
+            inWritePendingBytes = true;
+            try {
+                int bytesToWrite = writableBytes();
+                // Make sure we always write at least once, regardless if we have bytesToWrite or not.
+                // This ensures that zero-length frames will always be written.
+                for (;;) {
+                    if (!streamByteDistributor.distribute(bytesToWrite, this) ||
+                        (bytesToWrite = writableBytes()) <= 0 ||
+                        !isChannelWritable0()) {
+                        break;
+                    }
                 }
+            } finally {
+                inWritePendingBytes = false;
             }
         }
 
@@ -641,7 +649,7 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
                 }
             });
 
-            if (delta > 0) {
+            if (delta > 0 && isChannelWritable()) {
                 // The window size increased, send any pending frames for all streams.
                 writePendingBytes();
             }
@@ -660,21 +668,20 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
      * isChannelWritable()
      * </pre>
      */
-    private final class ListenerWritabilityMonitor extends WritabilityMonitor {
+    private final class ListenerWritabilityMonitor extends WritabilityMonitor implements Http2StreamVisitor {
         private final Listener listener;
-        private final Http2StreamVisitor checkStreamWritabilityVisitor = new Http2StreamVisitor() {
-            @Override
-            public boolean visit(Http2Stream stream) throws Http2Exception {
-                FlowState state = state(stream);
-                if (isWritable(state) != state.markedWritability()) {
-                    notifyWritabilityChanged(state);
-                }
-                return true;
-            }
-        };
 
         ListenerWritabilityMonitor(Listener listener) {
             this.listener = listener;
+        }
+
+        @Override
+        public boolean visit(Http2Stream stream) throws Http2Exception {
+            FlowState state = state(stream);
+            if (isWritable(state) != state.markedWritability()) {
+                notifyWritabilityChanged(state);
+            }
+            return true;
         }
 
         @Override
@@ -756,7 +763,7 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
         private void checkAllWritabilityChanged() throws Http2Exception {
             // Make sure we mark that we have notified as a result of this change.
             connectionState.markedWritability(isWritableConnection());
-            connection.forEachActiveStream(checkStreamWritabilityVisitor);
+            connection.forEachActiveStream(this);
         }
     }
 }

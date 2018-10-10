@@ -47,6 +47,7 @@ public abstract class HttpContentDecoder extends MessageToMessageDecoder<HttpObj
 
     static final String IDENTITY = HttpHeaderValues.IDENTITY.toString();
 
+    protected ChannelHandlerContext ctx;
     private EmbeddedChannel decoder;
     private boolean continueResponse;
 
@@ -97,7 +98,12 @@ public abstract class HttpContentDecoder extends MessageToMessageDecoder<HttpObj
             // the correct value can be set only after all chunks are processed/decoded.
             // If buffering is not an issue, add HttpObjectAggregator down the chain, it will set the header.
             // Otherwise, rely on LastHttpContent message.
-            headers.remove(HttpHeaderNames.CONTENT_LENGTH);
+            if (headers.contains(HttpHeaderNames.CONTENT_LENGTH)) {
+                headers.remove(HttpHeaderNames.CONTENT_LENGTH);
+                headers.set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
+            }
+            // Either it is already chunked or EOF terminated.
+            // See https://github.com/netty/netty/issues/5892
 
             // set new content encoding,
             CharSequence targetContentEncoding = getTargetContentEncoding(contentEncoding);
@@ -189,30 +195,37 @@ public abstract class HttpContentDecoder extends MessageToMessageDecoder<HttpObj
 
     @Override
     public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
-        cleanup();
+        cleanupSafely(ctx);
         super.handlerRemoved(ctx);
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-        cleanup();
+        cleanupSafely(ctx);
         super.channelInactive(ctx);
+    }
+
+    @Override
+    public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
+        this.ctx = ctx;
+        super.handlerAdded(ctx);
     }
 
     private void cleanup() {
         if (decoder != null) {
             // Clean-up the previous decoder if not cleaned up correctly.
-            if (decoder.finish()) {
-                for (;;) {
-                    ByteBuf buf = decoder.readInbound();
-                    if (buf == null) {
-                        break;
-                    }
-                    // Release the buffer
-                    buf.release();
-                }
-            }
+            decoder.finishAndReleaseAll();
             decoder = null;
+        }
+    }
+
+    private void cleanupSafely(ChannelHandlerContext ctx) {
+        try {
+            cleanup();
+        } catch (Throwable cause) {
+            // If cleanup throws any error we need to propagate it through the pipeline
+            // so we don't fail to propagate pipeline events.
+            ctx.fireExceptionCaught(cause);
         }
     }
 

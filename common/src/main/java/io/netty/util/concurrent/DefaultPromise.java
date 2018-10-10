@@ -15,12 +15,11 @@
  */
 package io.netty.util.concurrent;
 
-import io.netty.util.Signal;
-import io.netty.util.internal.EmptyArrays;
 import io.netty.util.internal.InternalThreadLocalMap;
-import io.netty.util.internal.OneTimeTask;
 import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.StringUtil;
+import io.netty.util.internal.SystemPropertyUtil;
+import io.netty.util.internal.ThrowableUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -35,19 +34,15 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(DefaultPromise.class);
     private static final InternalLogger rejectedExecutionLogger =
             InternalLoggerFactory.getInstance(DefaultPromise.class.getName() + ".rejectedExecution");
-    private static final int MAX_LISTENER_STACK_DEPTH = 8;
-    private static final AtomicReferenceFieldUpdater<DefaultPromise, Object> RESULT_UPDATER;
-    private static final Signal SUCCESS = Signal.valueOf(DefaultPromise.class, "SUCCESS");
-    private static final Signal UNCANCELLABLE = Signal.valueOf(DefaultPromise.class, "UNCANCELLABLE");
-    private static final CauseHolder CANCELLATION_CAUSE_HOLDER = new CauseHolder(new CancellationException());
-
-    static {
-        AtomicReferenceFieldUpdater<DefaultPromise, Object> updater =
-                PlatformDependent.newAtomicReferenceFieldUpdater(DefaultPromise.class, "result");
-        RESULT_UPDATER = updater == null ? AtomicReferenceFieldUpdater.newUpdater(DefaultPromise.class,
-                                                                                  Object.class, "result") : updater;
-        CANCELLATION_CAUSE_HOLDER.cause.setStackTrace(EmptyArrays.EMPTY_STACK_TRACE);
-    }
+    private static final int MAX_LISTENER_STACK_DEPTH = Math.min(8,
+            SystemPropertyUtil.getInt("io.netty.defaultPromise.maxListenerStackDepth", 8));
+    @SuppressWarnings("rawtypes")
+    private static final AtomicReferenceFieldUpdater<DefaultPromise, Object> RESULT_UPDATER =
+            AtomicReferenceFieldUpdater.newUpdater(DefaultPromise.class, Object.class, "result");
+    private static final Object SUCCESS = new Object();
+    private static final Object UNCANCELLABLE = new Object();
+    private static final CauseHolder CANCELLATION_CAUSE_HOLDER = new CauseHolder(ThrowableUtil.unknownStackTrace(
+            new CancellationException(), DefaultPromise.class, "cancel(...)"));
 
     private volatile Object result;
     private final EventExecutor executor;
@@ -64,7 +59,8 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
     private short waiters;
 
     /**
-     * Threading - EventExecutor. Only accessed inside the EventExecutor thread while notifying listeners.
+     * Threading - synchronized(this). We must prevent concurrent notification and FIFO listener notification if the
+     * executor changes.
      */
     private boolean notifyingListeners;
 
@@ -74,12 +70,19 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
      * It is preferable to use {@link EventExecutor#newPromise()} to create a new promise
      *
      * @param executor
-     *        the {@link EventExecutor} which is used to notify the promise once it is complete
+     *        the {@link EventExecutor} which is used to notify the promise once it is complete.
+     *        It is assumed this executor will protect against {@link StackOverflowError} exceptions.
+     *        The executor may be used to avoid {@link StackOverflowError} by executing a {@link Runnable} if the stack
+     *        depth exceeds a threshold.
+     *
      */
     public DefaultPromise(EventExecutor executor) {
         this.executor = checkNotNull(executor, "executor");
     }
 
+    /**
+     * See {@link #executor()} for expectations of the executor.
+     */
     protected DefaultPromise() {
         // only for subclasses
         executor = null;
@@ -294,15 +297,21 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
         }
     }
 
+    @SuppressWarnings("unchecked")
     @Override
     public V getNow() {
         Object result = this.result;
-        if (result instanceof CauseHolder || result == SUCCESS) {
+        if (result instanceof CauseHolder || result == SUCCESS || result == UNCANCELLABLE) {
             return null;
         }
         return (V) result;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @param mayInterruptIfRunning this value has no effect in this implementation.
+     */
     @Override
     public boolean cancel(boolean mayInterruptIfRunning) {
         if (RESULT_UPDATER.compareAndSet(this, null, CANCELLATION_CAUSE_HOLDER)) {
@@ -368,6 +377,14 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
         return buf;
     }
 
+    /**
+     * Get the executor used to notify listeners when this promise is complete.
+     * <p>
+     * It is assumed this executor will protect against {@link StackOverflowError} exceptions.
+     * The executor may be used to avoid {@link StackOverflowError} by executing a {@link Runnable} if the stack
+     * depth exceeds a threshold.
+     * @return The executor used to notify listeners when this promise is complete.
+     */
     protected EventExecutor executor() {
         return executor;
     }
@@ -384,19 +401,27 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
      * <p>
      * This method has a fixed depth of {@link #MAX_LISTENER_STACK_DEPTH} that will limit recursion to prevent
      * {@link StackOverflowError} and will stop notifying listeners added after this threshold is exceeded.
-     * @param eventExecutor the executor to use to notify the listener {@code l}.
+     * @param eventExecutor the executor to use to notify the listener {@code listener}.
      * @param future the future that is complete.
-     * @param l the listener to notify.
+     * @param listener the listener to notify.
      */
     protected static void notifyListener(
-            EventExecutor eventExecutor, final Future<?> future, final GenericFutureListener<?> l) {
-        if (eventExecutor.inEventLoop()) {
+            EventExecutor eventExecutor, final Future<?> future, final GenericFutureListener<?> listener) {
+        checkNotNull(eventExecutor, "eventExecutor");
+        checkNotNull(future, "future");
+        checkNotNull(listener, "listener");
+        notifyListenerWithStackOverFlowProtection(eventExecutor, future, listener);
+    }
+
+    private void notifyListeners() {
+        EventExecutor executor = executor();
+        if (executor.inEventLoop()) {
             final InternalThreadLocalMap threadLocals = InternalThreadLocalMap.get();
             final int stackDepth = threadLocals.futureListenerStackDepth();
             if (stackDepth < MAX_LISTENER_STACK_DEPTH) {
                 threadLocals.setFutureListenerStackDepth(stackDepth + 1);
                 try {
-                    notifyListener0(future, l);
+                    notifyListenersNow();
                 } finally {
                     threadLocals.setFutureListenerStackDepth(stackDepth);
                 }
@@ -404,51 +429,70 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
             }
         }
 
-        safeExecute(eventExecutor, new OneTimeTask() {
+        safeExecute(executor, new Runnable() {
             @Override
             public void run() {
-                notifyListener0(future, l);
+                notifyListenersNow();
             }
         });
     }
 
-    private void notifyListeners() {
-        // Modifications to listeners should be done in a synchronized block before this, and should be visible here.
-        if (listeners == null) {
-            return;
-        }
-        EventExecutor executor = executor();
+    /**
+     * The logic in this method should be identical to {@link #notifyListeners()} but
+     * cannot share code because the listener(s) cannot be cached for an instance of {@link DefaultPromise} since the
+     * listener(s) may be changed and is protected by a synchronized operation.
+     */
+    private static void notifyListenerWithStackOverFlowProtection(final EventExecutor executor,
+                                                                  final Future<?> future,
+                                                                  final GenericFutureListener<?> listener) {
         if (executor.inEventLoop()) {
-            notifyListeners0();
-            return;
+            final InternalThreadLocalMap threadLocals = InternalThreadLocalMap.get();
+            final int stackDepth = threadLocals.futureListenerStackDepth();
+            if (stackDepth < MAX_LISTENER_STACK_DEPTH) {
+                threadLocals.setFutureListenerStackDepth(stackDepth + 1);
+                try {
+                    notifyListener0(future, listener);
+                } finally {
+                    threadLocals.setFutureListenerStackDepth(stackDepth);
+                }
+                return;
+            }
         }
-        safeExecute(executor, new OneTimeTask() {
+
+        safeExecute(executor, new Runnable() {
             @Override
             public void run() {
-                notifyListeners0();
+                notifyListener0(future, listener);
             }
         });
     }
 
-    private void notifyListeners0() {
+    private void notifyListenersNow() {
         Object listeners;
-        while (!notifyingListeners) {
+        synchronized (this) {
+            // Only proceed if there are listeners to notify and we are not already notifying listeners.
+            if (notifyingListeners || this.listeners == null) {
+                return;
+            }
+            notifyingListeners = true;
+            listeners = this.listeners;
+            this.listeners = null;
+        }
+        for (;;) {
+            if (listeners instanceof DefaultFutureListeners) {
+                notifyListeners0((DefaultFutureListeners) listeners);
+            } else {
+                notifyListener0(this, (GenericFutureListener<?>) listeners);
+            }
             synchronized (this) {
                 if (this.listeners == null) {
+                    // Nothing can throw from within this method, so setting notifyingListeners back to false does not
+                    // need to be in a finally block.
+                    notifyingListeners = false;
                     return;
                 }
                 listeners = this.listeners;
                 this.listeners = null;
-            }
-            notifyingListeners = true;
-            try {
-                if (listeners instanceof DefaultFutureListeners) {
-                    notifyListeners0((DefaultFutureListeners) listeners);
-                } else {
-                    notifyListener0(this, (GenericFutureListener<? extends Future<V>>) listeners);
-                }
-            } finally {
-                notifyingListeners = false;
             }
         }
     }
@@ -466,7 +510,9 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
         try {
             l.operationComplete(future);
         } catch (Throwable t) {
-            logger.warn("An exception was thrown by {}.operationComplete()", l.getClass().getName(), t);
+            if (logger.isWarnEnabled()) {
+                logger.warn("An exception was thrown by " + l.getClass().getName() + ".operationComplete()", t);
+            }
         }
     }
 
@@ -476,7 +522,7 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
         } else if (listeners instanceof DefaultFutureListeners) {
             ((DefaultFutureListeners) listeners).add(listener);
         } else {
-            listeners = new DefaultFutureListeners((GenericFutureListener<? extends Future<V>>) listeners, listener);
+            listeners = new DefaultFutureListeners((GenericFutureListener<?>) listeners, listener);
         }
     }
 
@@ -552,6 +598,9 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
         try {
             for (;;) {
                 synchronized (this) {
+                    if (isDone()) {
+                        return true;
+                    }
                     incWaiters();
                     try {
                         wait(waitTime / 1000000, (int) (waitTime % 1000000));
@@ -613,7 +662,7 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
             if (listeners instanceof GenericProgressiveFutureListener[]) {
                 final GenericProgressiveFutureListener<?>[] array =
                         (GenericProgressiveFutureListener<?>[]) listeners;
-                safeExecute(executor, new OneTimeTask() {
+                safeExecute(executor, new Runnable() {
                     @Override
                     public void run() {
                         notifyProgressiveListeners0(self, array, progress, total);
@@ -622,7 +671,7 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
             } else {
                 final GenericProgressiveFutureListener<ProgressiveFuture<V>> l =
                         (GenericProgressiveFutureListener<ProgressiveFuture<V>>) listeners;
-                safeExecute(executor, new OneTimeTask() {
+                safeExecute(executor, new Runnable() {
                     @Override
                     public void run() {
                         notifyProgressiveListener0(self, l, progress, total);
@@ -693,7 +742,9 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
         try {
             l.operationProgressed(future, progress, total);
         } catch (Throwable t) {
-            logger.warn("An exception was thrown by {}.operationProgressed()", l.getClass().getName(), t);
+            if (logger.isWarnEnabled()) {
+                logger.warn("An exception was thrown by " + l.getClass().getName() + ".operationProgressed()", t);
+            }
         }
     }
 

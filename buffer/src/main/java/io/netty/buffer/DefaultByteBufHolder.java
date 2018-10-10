@@ -123,7 +123,7 @@ public class DefaultByteBufHolder implements ByteBufHolder {
     }
 
     /**
-     * Return {@link ByteBuf#toString()} without checking the reference count first. This is useful to implemement
+     * Return {@link ByteBuf#toString()} without checking the reference count first. This is useful to implement
      * {@link #toString()}.
      */
     protected final String contentToString() {
@@ -133,5 +133,21 @@ public class DefaultByteBufHolder implements ByteBufHolder {
     @Override
     public String toString() {
         return StringUtil.simpleClassName(this) + '(' + contentToString() + ')';
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o instanceof ByteBufHolder) {
+            return data.equals(((ByteBufHolder) o).content());
+        }
+        return false;
+    }
+
+    @Override
+    public int hashCode() {
+        return data.hashCode();
     }
 }

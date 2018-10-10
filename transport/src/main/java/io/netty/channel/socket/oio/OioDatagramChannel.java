@@ -29,7 +29,6 @@ import io.netty.channel.oio.AbstractOioMessageChannel;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.channel.socket.DatagramChannelConfig;
 import io.netty.channel.socket.DatagramPacket;
-import io.netty.channel.socket.DefaultDatagramChannelConfig;
 import io.netty.util.internal.EmptyArrays;
 import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.StringUtil;
@@ -44,6 +43,7 @@ import java.net.NetworkInterface;
 import java.net.SocketAddress;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
+import java.nio.channels.NotYetConnectedException;
 import java.util.List;
 import java.util.Locale;
 
@@ -68,7 +68,7 @@ public class OioDatagramChannel extends AbstractOioMessageChannel
             StringUtil.simpleClassName(ByteBuf.class) + ')';
 
     private final MulticastSocket socket;
-    private final DatagramChannelConfig config;
+    private final OioDatagramChannelConfig config;
     private final java.net.DatagramPacket tmpPacket = new java.net.DatagramPacket(EmptyArrays.EMPTY_BYTES, 0);
 
     private static MulticastSocket newSocket() {
@@ -109,7 +109,7 @@ public class OioDatagramChannel extends AbstractOioMessageChannel
         }
 
         this.socket = socket;
-        config = new DefaultDatagramChannelConfig(this, socket);
+        config = new DefaultOioDatagramChannelConfig(this, socket);
     }
 
     @Override
@@ -117,7 +117,13 @@ public class OioDatagramChannel extends AbstractOioMessageChannel
         return METADATA;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * This can be safetly cast to {@link OioDatagramChannelConfig}.
+     */
     @Override
+    // TODO: Change return type to OioDatagramChannelConfig in next major release
     public DatagramChannelConfig config() {
         return config;
     }
@@ -205,6 +211,8 @@ public class OioDatagramChannel extends AbstractOioMessageChannel
         ByteBuf data = config.getAllocator().heapBuffer(allocHandle.guess());
         boolean free = true;
         try {
+            // Ensure we null out the address which may have been set before.
+            tmpPacket.setAddress(null);
             tmpPacket.setData(data.array(), data.arrayOffset(), data.capacity());
             socket.receive(tmpPacket);
 
@@ -253,20 +261,28 @@ public class OioDatagramChannel extends AbstractOioMessageChannel
             }
 
             final int length = data.readableBytes();
-            if (remoteAddress != null) {
-                tmpPacket.setSocketAddress(remoteAddress);
-            }
-            if (data.hasArray()) {
-                tmpPacket.setData(data.array(), data.arrayOffset() + data.readerIndex(), length);
-            } else {
-                byte[] tmp = new byte[length];
-                data.getBytes(data.readerIndex(), tmp);
-                tmpPacket.setData(tmp);
-            }
             try {
+                if (remoteAddress != null) {
+                    tmpPacket.setSocketAddress(remoteAddress);
+                } else {
+                    if (!isConnected()) {
+                        // If not connected we should throw a NotYetConnectedException() to be consistent with
+                        // NioDatagramChannel
+                        throw new NotYetConnectedException();
+                    }
+                    // Ensure we null out the address which may have been set before.
+                    tmpPacket.setAddress(null);
+                }
+                if (data.hasArray()) {
+                    tmpPacket.setData(data.array(), data.arrayOffset() + data.readerIndex(), length);
+                } else {
+                    byte[] tmp = new byte[length];
+                    data.getBytes(data.readerIndex(), tmp);
+                    tmpPacket.setData(tmp);
+                }
                 socket.send(tmpPacket);
                 in.remove();
-            } catch (IOException e) {
+            } catch (Exception e) {
                 // Continue on write error as a DatagramChannel can write to multiple remote peers
                 //
                 // See https://github.com/netty/netty/issues/2665

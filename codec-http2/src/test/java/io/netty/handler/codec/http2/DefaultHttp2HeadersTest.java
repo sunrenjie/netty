@@ -22,12 +22,8 @@ import org.junit.Test;
 
 import java.util.Map.Entry;
 
-import static io.netty.util.AsciiString.of;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static io.netty.util.AsciiString.*;
+import static org.junit.Assert.*;
 
 public class DefaultHttp2HeadersTest {
 
@@ -37,7 +33,7 @@ public class DefaultHttp2HeadersTest {
     }
 
     @Test(expected = Http2Exception.class)
-    public void emtpyHeaderNameNotAllowed() {
+    public void emptyHeaderNameNotAllowed() {
         new DefaultHttp2Headers().add(StringUtil.EMPTY_STRING, "foo");
     }
 
@@ -105,7 +101,7 @@ public class DefaultHttp2HeadersTest {
     }
 
     @Test
-    public void testSetHeadersOrdersPsuedoHeadersCorrectly() {
+    public void testSetHeadersOrdersPseudoHeadersCorrectly() {
         Http2Headers headers = newHeaders();
         Http2Headers other = new DefaultHttp2Headers().add("name2", "value2").authority("foo");
 
@@ -117,7 +113,7 @@ public class DefaultHttp2HeadersTest {
     }
 
     @Test
-    public void testSetAllOrdersPsuedoHeadersCorrectly() {
+    public void testSetAllOrdersPseudoHeadersCorrectly() {
         Http2Headers headers = newHeaders();
         Http2Headers other = new DefaultHttp2Headers().add("name2", "value2").authority("foo");
 
@@ -147,13 +143,22 @@ public class DefaultHttp2HeadersTest {
         assertEquals(1, http2Headers.names().size());
     }
 
+    @Test
+    public void testContainsNameAndValue() {
+        Http2Headers headers = newHeaders();
+        assertTrue(headers.contains("name1", "value2"));
+        assertFalse(headers.contains("name1", "Value2"));
+        assertTrue(headers.contains("2name", "Value3", true));
+        assertFalse(headers.contains("2name", "Value3", false));
+    }
+
     private static void verifyAllPseudoHeadersPresent(Http2Headers headers) {
         for (PseudoHeaderName pseudoName : PseudoHeaderName.values()) {
             assertNotNull(headers.get(pseudoName.value()));
         }
     }
 
-    private static void verifyPseudoHeadersFirst(Http2Headers headers) {
+    static void verifyPseudoHeadersFirst(Http2Headers headers) {
         CharSequence lastNonPseudoName = null;
         for (Entry<CharSequence, CharSequence> entry: headers) {
             if (entry.getKey().length() == 0 || entry.getKey().charAt(0) != ':') {

@@ -21,9 +21,11 @@ import io.netty.channel.SelectStrategy;
 import io.netty.channel.SingleThreadEventLoop;
 import io.netty.channel.epoll.AbstractEpollChannel.AbstractEpollUnsafe;
 import io.netty.channel.unix.FileDescriptor;
+import io.netty.channel.unix.IovArray;
 import io.netty.util.IntSupplier;
 import io.netty.util.collection.IntObjectHashMap;
 import io.netty.util.collection.IntObjectMap;
+import io.netty.util.concurrent.RejectedExecutionHandler;
 import io.netty.util.internal.ObjectUtil;
 import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.logging.InternalLogger;
@@ -33,44 +35,55 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Queue;
+import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+
+import static java.lang.Math.min;
 
 /**
  * {@link EventLoop} which uses epoll under the covers. Only works on Linux!
  */
 final class EpollEventLoop extends SingleThreadEventLoop {
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(EpollEventLoop.class);
-    private static final AtomicIntegerFieldUpdater<EpollEventLoop> WAKEN_UP_UPDATER;
+    private static final AtomicIntegerFieldUpdater<EpollEventLoop> WAKEN_UP_UPDATER =
+            AtomicIntegerFieldUpdater.newUpdater(EpollEventLoop.class, "wakenUp");
 
     static {
-        AtomicIntegerFieldUpdater<EpollEventLoop> updater =
-                PlatformDependent.newAtomicIntegerFieldUpdater(EpollEventLoop.class, "wakenUp");
-        if (updater == null) {
-            updater = AtomicIntegerFieldUpdater.newUpdater(EpollEventLoop.class, "wakenUp");
-        }
-        WAKEN_UP_UPDATER = updater;
+        // Ensure JNI is initialized by the time this class is loaded by this time!
+        // We use unix-common methods in this class which are backed by JNI methods.
+        Epoll.ensureAvailability();
     }
 
+    // Pick a number that no task could have previously used.
+    private long prevDeadlineNanos = nanoTime() - 1;
     private final FileDescriptor epollFd;
     private final FileDescriptor eventFd;
+    private final FileDescriptor timerFd;
     private final IntObjectMap<AbstractEpollChannel> channels = new IntObjectHashMap<AbstractEpollChannel>(4096);
     private final boolean allowGrowing;
     private final EpollEventArray events;
-    private final IovArray iovArray = new IovArray();
+
+    // These are initialized on first use
+    private IovArray iovArray;
+    private NativeDatagramPacketArray datagramPacketArray;
+
     private final SelectStrategy selectStrategy;
     private final IntSupplier selectNowSupplier = new IntSupplier() {
         @Override
         public int get() throws Exception {
-            return Native.epollWait(epollFd.intValue(), events, 0);
+            return epollWaitNow();
         }
     };
-
     private volatile int wakenUp;
     private volatile int ioRatio = 50;
 
-    EpollEventLoop(EventLoopGroup parent, Executor executor, int maxEvents, SelectStrategy strategy) {
-        super(parent, executor, false);
+    // See http://man7.org/linux/man-pages/man2/timerfd_create.2.html.
+    private static final long MAX_SCHEDULED_TIMERFD_NS = 999999999;
+
+    EpollEventLoop(EventLoopGroup parent, Executor executor, int maxEvents,
+                   SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler) {
+        super(parent, executor, false, DEFAULT_MAX_PENDING_TASKS, rejectedExecutionHandler);
         selectStrategy = ObjectUtil.checkNotNull(strategy, "strategy");
         if (maxEvents == 0) {
             allowGrowing = true;
@@ -82,6 +95,7 @@ final class EpollEventLoop extends SingleThreadEventLoop {
         boolean success = false;
         FileDescriptor epollFd = null;
         FileDescriptor eventFd = null;
+        FileDescriptor timerFd = null;
         try {
             this.epollFd = epollFd = Native.newEpollCreate();
             this.eventFd = eventFd = Native.newEventFd();
@@ -89,6 +103,12 @@ final class EpollEventLoop extends SingleThreadEventLoop {
                 Native.epollCtlAdd(epollFd.intValue(), eventFd.intValue(), Native.EPOLLIN);
             } catch (IOException e) {
                 throw new IllegalStateException("Unable to add eventFd filedescriptor to epoll", e);
+            }
+            this.timerFd = timerFd = Native.newTimerFd();
+            try {
+                Native.epollCtlAdd(epollFd.intValue(), timerFd.intValue(), Native.EPOLLIN | Native.EPOLLET);
+            } catch (IOException e) {
+                throw new IllegalStateException("Unable to add timerFd filedescriptor to epoll", e);
             }
             success = true;
         } finally {
@@ -107,6 +127,13 @@ final class EpollEventLoop extends SingleThreadEventLoop {
                         // ignore
                     }
                 }
+                if (timerFd != null) {
+                    try {
+                        timerFd.close();
+                    } catch (Exception e) {
+                        // ignore
+                    }
+                }
             }
         }
     }
@@ -114,9 +141,25 @@ final class EpollEventLoop extends SingleThreadEventLoop {
     /**
      * Return a cleared {@link IovArray} that can be used for writes in this {@link EventLoop}.
      */
-    IovArray cleanArray() {
-        iovArray.clear();
+    IovArray cleanIovArray() {
+        if (iovArray == null) {
+            iovArray = new IovArray();
+        } else {
+            iovArray.clear();
+        }
         return iovArray;
+    }
+
+    /**
+     * Return a cleared {@link NativeDatagramPacketArray} that can be used for writes in this {@link EventLoop}.
+     */
+    NativeDatagramPacketArray cleanDatagramPacketArray() {
+        if (datagramPacketArray == null) {
+            datagramPacketArray = new NativeDatagramPacketArray();
+        } else {
+            datagramPacketArray.clear();
+        }
+        return datagramPacketArray;
     }
 
     @Override
@@ -128,11 +171,11 @@ final class EpollEventLoop extends SingleThreadEventLoop {
     }
 
     /**
-     * Register the given epoll with this {@link io.netty.channel.EventLoop}.
+     * Register the given epoll with this {@link EventLoop}.
      */
     void add(AbstractEpollChannel ch) throws IOException {
         assert inEventLoop();
-        int fd = ch.fd().intValue();
+        int fd = ch.socket.intValue();
         Native.epollCtlAdd(epollFd.intValue(), fd, ch.flags);
         channels.put(fd, ch);
     }
@@ -142,7 +185,7 @@ final class EpollEventLoop extends SingleThreadEventLoop {
      */
     void modify(AbstractEpollChannel ch) throws IOException {
         assert inEventLoop();
-        Native.epollCtlMod(epollFd.intValue(), ch.fd().intValue(), ch.flags);
+        Native.epollCtlMod(epollFd.intValue(), ch.socket.intValue(), ch.flags);
     }
 
     /**
@@ -152,7 +195,7 @@ final class EpollEventLoop extends SingleThreadEventLoop {
         assert inEventLoop();
 
         if (ch.isOpen()) {
-            int fd = ch.fd().intValue();
+            int fd = ch.socket.intValue();
             if (channels.remove(fd) != null) {
                 // Remove the epoll. This is only needed if it's still open as otherwise it will be automatically
                 // removed once the file-descriptor is closed.
@@ -162,9 +205,10 @@ final class EpollEventLoop extends SingleThreadEventLoop {
     }
 
     @Override
-    protected Queue<Runnable> newTaskQueue() {
+    protected Queue<Runnable> newTaskQueue(int maxPendingTasks) {
         // This event loop never calls takeTask()
-        return PlatformDependent.newMpscQueue();
+        return maxPendingTasks == Integer.MAX_VALUE ? PlatformDependent.<Runnable>newMpscQueue()
+                                                    : PlatformDependent.<Runnable>newMpscQueue(maxPendingTasks);
     }
 
     /**
@@ -185,43 +229,32 @@ final class EpollEventLoop extends SingleThreadEventLoop {
         this.ioRatio = ioRatio;
     }
 
-    private int epollWait(boolean oldWakenUp) throws IOException {
-        int selectCnt = 0;
-        long currentTimeNanos = System.nanoTime();
-        long selectDeadLineNanos = currentTimeNanos + delayNanos(currentTimeNanos);
-        for (;;) {
-            long timeoutMillis = (selectDeadLineNanos - currentTimeNanos + 500000L) / 1000000L;
-            if (timeoutMillis <= 0) {
-                if (selectCnt == 0) {
-                    int ready = Native.epollWait(epollFd.intValue(), events, 0);
-                    if (ready > 0) {
-                        return ready;
-                    }
-                }
-                break;
-            }
-
-            // If a task was submitted when wakenUp value was 1, the task didn't get a chance to produce wakeup event.
-            // So we need to check task queue again before calling epoll_wait. If we don't, the task might be pended
-            // until epoll_wait was timed out. It might be pended until idle timeout if IdleStateHandler existed
-            // in pipeline.
-            if (hasTasks() && WAKEN_UP_UPDATER.compareAndSet(this, 0, 1)) {
-                return Native.epollWait(epollFd.intValue(), events, 0);
-            }
-
-            int selectedKeys = Native.epollWait(epollFd.intValue(), events, (int) timeoutMillis);
-            selectCnt ++;
-
-            if (selectedKeys != 0 || oldWakenUp || wakenUp == 1 || hasTasks() || hasScheduledTasks()) {
-                // - Selected something,
-                // - waken up by user, or
-                // - the task queue has a pending task.
-                // - a scheduled task is ready for processing
-                return selectedKeys;
-            }
-            currentTimeNanos = System.nanoTime();
+    private int epollWait(boolean oldWakeup) throws IOException {
+        // If a task was submitted when wakenUp value was 1, the task didn't get a chance to produce wakeup event.
+        // So we need to check task queue again before calling epoll_wait. If we don't, the task might be pended
+        // until epoll_wait was timed out. It might be pended until idle timeout if IdleStateHandler existed
+        // in pipeline.
+        if (oldWakeup && hasTasks()) {
+            return epollWaitNow();
         }
-        return 0;
+
+        int delaySeconds;
+        int delayNanos;
+        long curDeadlineNanos = deadlineNanos();
+        if (curDeadlineNanos == prevDeadlineNanos) {
+            delaySeconds = -1;
+            delayNanos = -1;
+        } else {
+            long totalDelay = delayNanos(System.nanoTime());
+            prevDeadlineNanos = curDeadlineNanos;
+            delaySeconds = (int) min(totalDelay / 1000000000L, Integer.MAX_VALUE);
+            delayNanos = (int) min(totalDelay - delaySeconds * 1000000000L, Integer.MAX_VALUE);
+        }
+        return Native.epollWait(epollFd, events, timerFd, delaySeconds, delayNanos);
+    }
+
+    private int epollWaitNow() throws IOException {
+        return Native.epollWait(epollFd, events, timerFd, 0, 0);
     }
 
     @Override
@@ -266,30 +299,42 @@ final class EpollEventLoop extends SingleThreadEventLoop {
                         if (wakenUp == 1) {
                             Native.eventFdWrite(eventFd.intValue(), 1L);
                         }
-                    default:
                         // fallthrough
+                    default:
                 }
 
                 final int ioRatio = this.ioRatio;
                 if (ioRatio == 100) {
-                    if (strategy > 0) {
-                        processReady(events, strategy);
+                    try {
+                        if (strategy > 0) {
+                            processReady(events, strategy);
+                        }
+                    } finally {
+                        // Ensure we always run tasks.
+                        runAllTasks();
                     }
-                    runAllTasks();
                 } else {
                     final long ioStartTime = System.nanoTime();
 
-                    if (strategy > 0) {
-                        processReady(events, strategy);
+                    try {
+                        if (strategy > 0) {
+                            processReady(events, strategy);
+                        }
+                    } finally {
+                        // Ensure we always run tasks.
+                        final long ioTime = System.nanoTime() - ioStartTime;
+                        runAllTasks(ioTime * (100 - ioRatio) / ioRatio);
                     }
-
-                    final long ioTime = System.nanoTime() - ioStartTime;
-                    runAllTasks(ioTime * (100 - ioRatio) / ioRatio);
                 }
                 if (allowGrowing && strategy == events.length()) {
                     //increase the size of the array as we needed the whole space for the events
                     events.increase();
                 }
+            } catch (Throwable t) {
+                handleLoopException(t);
+            }
+            // Always handle shutdown even if the loop processing threw an exception.
+            try {
                 if (isShuttingDown()) {
                     closeAll();
                     if (confirmShutdown()) {
@@ -297,25 +342,31 @@ final class EpollEventLoop extends SingleThreadEventLoop {
                     }
                 }
             } catch (Throwable t) {
-                logger.warn("Unexpected exception in the selector loop.", t);
-
-                // Prevent possible consecutive immediate failures that lead to
-                // excessive CPU consumption.
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e) {
-                    // Ignore.
-                }
+                handleLoopException(t);
             }
+        }
+    }
+
+    private static void handleLoopException(Throwable t) {
+        logger.warn("Unexpected exception in the selector loop.", t);
+
+        // Prevent possible consecutive immediate failures that lead to
+        // excessive CPU consumption.
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            // Ignore.
         }
     }
 
     private void closeAll() {
         try {
-            Native.epollWait(epollFd.intValue(), events, 0);
+            epollWaitNow();
         } catch (IOException ignore) {
             // ignore on close
         }
+        // Using the intermediate collection to prevent ConcurrentModificationException.
+        // In the `close()` method, the channel is deleted from `channels` map.
         Collection<AbstractEpollChannel> array = new ArrayList<AbstractEpollChannel>(channels.size());
 
         for (AbstractEpollChannel channel: channels.values()) {
@@ -331,8 +382,11 @@ final class EpollEventLoop extends SingleThreadEventLoop {
         for (int i = 0; i < ready; i ++) {
             final int fd = events.fd(i);
             if (fd == eventFd.intValue()) {
-                // consume wakeup event
-                Native.eventFdRead(eventFd.intValue());
+                // consume wakeup event.
+                Native.eventFdRead(fd);
+            } else if (fd == timerFd.intValue()) {
+                // consume wakeup event, necessary because the timer is added with ET mode.
+                Native.timerFdRead(fd);
             } else {
                 final long ev = events.events(i);
 
@@ -401,9 +455,21 @@ final class EpollEventLoop extends SingleThreadEventLoop {
             } catch (IOException e) {
                 logger.warn("Failed to close the event fd.", e);
             }
+            try {
+                timerFd.close();
+            } catch (IOException e) {
+                logger.warn("Failed to close the timer fd.", e);
+            }
         } finally {
             // release native memory
-            iovArray.release();
+            if (iovArray != null) {
+                iovArray.release();
+                iovArray = null;
+            }
+            if (datagramPacketArray != null) {
+                datagramPacketArray.release();
+                datagramPacketArray = null;
+            }
             events.free();
         }
     }

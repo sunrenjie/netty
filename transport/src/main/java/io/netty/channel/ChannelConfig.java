@@ -121,7 +121,8 @@ public interface ChannelConfig {
     ChannelConfig setConnectTimeoutMillis(int connectTimeoutMillis);
 
     /**
-     * @deprecated Use {@link MaxMessagesRecvByteBufAllocator}
+     * @deprecated Use {@link MaxMessagesRecvByteBufAllocator} and
+     * {@link MaxMessagesRecvByteBufAllocator#maxMessagesPerRead()}.
      * <p>
      * Returns the maximum number of messages to read per read loop.
      * a {@link ChannelInboundHandler#channelRead(ChannelHandlerContext, Object) channelRead()} event.
@@ -131,7 +132,8 @@ public interface ChannelConfig {
     int getMaxMessagesPerRead();
 
     /**
-     * @deprecated Use {@link MaxMessagesRecvByteBufAllocator}
+     * @deprecated Use {@link MaxMessagesRecvByteBufAllocator} and
+     * {@link MaxMessagesRecvByteBufAllocator#maxMessagesPerRead(int)}.
      * <p>
      * Sets the maximum number of messages to read per read loop.
      * If this value is greater than 1, an event loop might attempt to read multiple times to procure multiple messages.
@@ -195,21 +197,15 @@ public interface ChannelConfig {
     ChannelConfig setAutoRead(boolean autoRead);
 
     /**
-     * @deprecated From version 5.0, {@link Channel} will not be closed on write failure.
-     *
      * Returns {@code true} if and only if the {@link Channel} will be closed automatically and immediately on
-     * write failure.  The default is {@code false}.
+     * write failure. The default is {@code true}.
      */
-    @Deprecated
     boolean isAutoClose();
 
     /**
-     * @deprecated From version 5.0, {@link Channel} will not be closed on write failure.
-     *
-     * Sets whether the {@link Channel} should be closed automatically and immediately on write faillure.
-     * The default is {@code false}.
+     * Sets whether the {@link Channel} should be closed automatically and immediately on write failure.
+     * The default is {@code true}.
      */
-    @Deprecated
     ChannelConfig setAutoClose(boolean autoClose);
 
     /**
@@ -220,13 +216,11 @@ public interface ChannelConfig {
     int getWriteBufferHighWaterMark();
 
     /**
-     * @deprecated Use {@link #setWriteBufferWaterMark(WriteBufferWaterMark)}
      * <p>
      * Sets the high water mark of the write buffer.  If the number of bytes
      * queued in the write buffer exceeds this value, {@link Channel#isWritable()}
      * will start to return {@code false}.
      */
-    @Deprecated
     ChannelConfig setWriteBufferHighWaterMark(int writeBufferHighWaterMark);
 
     /**
@@ -239,7 +233,6 @@ public interface ChannelConfig {
     int getWriteBufferLowWaterMark();
 
     /**
-     * @deprecated Use {@link #setWriteBufferWaterMark(WriteBufferWaterMark)}
      * <p>
      * Sets the low water mark of the write buffer.  Once the number of bytes
      * queued in the write buffer exceeded the
@@ -247,7 +240,6 @@ public interface ChannelConfig {
      * dropped down below this value, {@link Channel#isWritable()} will start to return
      * {@code true} again.
      */
-    @Deprecated
     ChannelConfig setWriteBufferLowWaterMark(int writeBufferLowWaterMark);
 
     /**

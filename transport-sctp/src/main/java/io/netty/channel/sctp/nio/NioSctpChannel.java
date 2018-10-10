@@ -34,7 +34,6 @@ import io.netty.channel.sctp.SctpChannelConfig;
 import io.netty.channel.sctp.SctpMessage;
 import io.netty.channel.sctp.SctpNotificationHandler;
 import io.netty.channel.sctp.SctpServerChannel;
-import io.netty.util.internal.OneTimeTask;
 import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.StringUtil;
 import io.netty.util.internal.logging.InternalLogger;
@@ -308,12 +307,10 @@ public class NioSctpChannel extends AbstractNioMessageChannel implements io.nett
             }
         }
         ByteBuffer nioData;
-        if (!needsCopy) {
-            nioData = data.nioBuffer();
-        } else {
+        if (needsCopy) {
             data = alloc.directBuffer(dataLen).writeBytes(data);
-            nioData = data.nioBuffer();
         }
+        nioData = data.nioBuffer();
         final MessageInfo mi = MessageInfo.createOutgoing(association(), null, packet.streamIdentifier());
         mi.payloadProtocolID(packet.protocolIdentifier());
         mi.streamNumber(packet.streamIdentifier());
@@ -356,7 +353,7 @@ public class NioSctpChannel extends AbstractNioMessageChannel implements io.nett
                 promise.setFailure(t);
             }
         } else {
-            eventLoop().execute(new OneTimeTask() {
+            eventLoop().execute(new Runnable() {
                 @Override
                 public void run() {
                     bindAddress(localAddress, promise);
@@ -381,7 +378,7 @@ public class NioSctpChannel extends AbstractNioMessageChannel implements io.nett
                 promise.setFailure(t);
             }
         } else {
-            eventLoop().execute(new OneTimeTask() {
+            eventLoop().execute(new Runnable() {
                 @Override
                 public void run() {
                     unbindAddress(localAddress, promise);

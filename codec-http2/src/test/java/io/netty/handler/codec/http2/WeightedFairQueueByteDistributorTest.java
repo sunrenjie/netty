@@ -14,15 +14,10 @@
  */
 package io.netty.handler.codec.http2;
 
-import io.netty.util.collection.IntObjectHashMap;
-import io.netty.util.collection.IntObjectMap;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
-import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
-import org.mockito.invocation.InvocationOnMock;
-import org.mockito.stubbing.Answer;
 import org.mockito.verification.VerificationMode;
 
 import static io.netty.handler.codec.http2.Http2CodecUtil.DEFAULT_PRIORITY_WEIGHT;
@@ -31,19 +26,20 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.anyInt;
-import static org.mockito.Matchers.eq;
-import static org.mockito.Matchers.same;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.atMost;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.same;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
-public class WeightedFairQueueByteDistributorTest {
+public class WeightedFairQueueByteDistributorTest extends AbstractWeightedFairQueueByteDistributorDependencyTest {
     private static final int STREAM_A = 1;
     private static final int STREAM_B = 3;
     private static final int STREAM_C = 5;
@@ -51,50 +47,87 @@ public class WeightedFairQueueByteDistributorTest {
     private static final int STREAM_E = 9;
     private static final int ALLOCATION_QUANTUM = 100;
 
-    private Http2Connection connection;
-    private WeightedFairQueueByteDistributor distributor;
-
-    @Mock
-    private StreamByteDistributor.Writer writer;
-
     @Before
     public void setup() throws Http2Exception {
         MockitoAnnotations.initMocks(this);
 
-        connection = new DefaultHttp2Connection(false);
-        distributor = new WeightedFairQueueByteDistributor(connection);
-        distributor.allocationQuantum(ALLOCATION_QUANTUM);
-
         // Assume we always write all the allocated bytes.
-        doAnswer(writeAnswer()).when(writer).write(any(Http2Stream.class), anyInt());
+        doAnswer(writeAnswer(false)).when(writer).write(any(Http2Stream.class), anyInt());
+
+        setup(-1);
+    }
+
+    private void setup(int maxStateOnlySize) throws Http2Exception {
+        connection = new DefaultHttp2Connection(false);
+        distributor = maxStateOnlySize >= 0 ? new WeightedFairQueueByteDistributor(connection, maxStateOnlySize)
+                                            : new WeightedFairQueueByteDistributor(connection);
+        distributor.allocationQuantum(ALLOCATION_QUANTUM);
 
         connection.local().createStream(STREAM_A, false);
         connection.local().createStream(STREAM_B, false);
         Http2Stream streamC = connection.local().createStream(STREAM_C, false);
         Http2Stream streamD = connection.local().createStream(STREAM_D, false);
-        streamC.setPriority(STREAM_A, DEFAULT_PRIORITY_WEIGHT, false);
-        streamD.setPriority(STREAM_A, DEFAULT_PRIORITY_WEIGHT, false);
+        setPriority(streamC.id(), STREAM_A, DEFAULT_PRIORITY_WEIGHT, false);
+        setPriority(streamD.id(), STREAM_A, DEFAULT_PRIORITY_WEIGHT, false);
     }
 
-    private Answer<Void> writeAnswer() {
-        return new Answer<Void>() {
-            @Override
-            public Void answer(InvocationOnMock in) throws Throwable {
-                Http2Stream stream = in.getArgumentAt(0, Http2Stream.class);
-                int numBytes = in.getArgumentAt(1, Integer.class);
-                int streamableBytes = distributor.streamableBytes0(stream) - numBytes;
-                updateStream(stream.id(), streamableBytes, streamableBytes > 0);
-                return null;
-            }
-        };
+    /**
+     * In this test, we block B such that it has no frames. We distribute enough bytes for all streams and stream B
+     * should be preserved in the priority queue structure until it has no "active" children, but it should not be
+     * doubly added to stream 0.
+     *
+     * <pre>
+     *         0
+     *         |
+     *         A
+     *         |
+     *        [B]
+     *         |
+     *         C
+     *         |
+     *         D
+     * </pre>
+     *
+     * After the write:
+     * <pre>
+     *         0
+     * </pre>
+     */
+    @Test
+    public void writeWithNonActiveStreamShouldNotDobuleAddToPriorityQueue() throws Http2Exception {
+        initState(STREAM_A, 400, true);
+        initState(STREAM_B, 500, true);
+        initState(STREAM_C, 600, true);
+        initState(STREAM_D, 700, true);
+
+        setPriority(STREAM_B, STREAM_A, DEFAULT_PRIORITY_WEIGHT, true);
+        setPriority(STREAM_D, STREAM_C, DEFAULT_PRIORITY_WEIGHT, true);
+
+        // Block B, but it should still remain in the queue/tree structure.
+        initState(STREAM_B, 0, false);
+
+        // Get the streams before the write, because they may be be closed.
+        Http2Stream streamA = stream(STREAM_A);
+        Http2Stream streamB = stream(STREAM_B);
+        Http2Stream streamC = stream(STREAM_C);
+        Http2Stream streamD = stream(STREAM_D);
+
+        reset(writer);
+        doAnswer(writeAnswer(true)).when(writer).write(any(Http2Stream.class), anyInt());
+
+        assertFalse(write(400 + 600 + 700));
+        assertEquals(400, captureWrites(streamA));
+        verifyNeverWrite(streamB);
+        assertEquals(600, captureWrites(streamC));
+        assertEquals(700, captureWrites(streamD));
     }
 
     @Test
     public void bytesUnassignedAfterProcessing() throws Http2Exception {
-        updateStream(STREAM_A, 1, true);
-        updateStream(STREAM_B, 2, true);
-        updateStream(STREAM_C, 3, true);
-        updateStream(STREAM_D, 4, true);
+        initState(STREAM_A, 1, true);
+        initState(STREAM_B, 2, true);
+        initState(STREAM_C, 3, true);
+        initState(STREAM_D, 4, true);
 
         assertFalse(write(10));
         verifyWrite(STREAM_A, 1);
@@ -111,10 +144,10 @@ public class WeightedFairQueueByteDistributorTest {
 
     @Test
     public void connectionErrorForWriterException() throws Http2Exception {
-        updateStream(STREAM_A, 1, true);
-        updateStream(STREAM_B, 2, true);
-        updateStream(STREAM_C, 3, true);
-        updateStream(STREAM_D, 4, true);
+        initState(STREAM_A, 1, true);
+        initState(STREAM_B, 2, true);
+        initState(STREAM_C, 3, true);
+        initState(STREAM_D, 4, true);
 
         Exception fakeException = new RuntimeException("Fake exception");
         doThrow(fakeException).when(writer).write(same(stream(STREAM_C)), eq(3));
@@ -133,7 +166,7 @@ public class WeightedFairQueueByteDistributorTest {
         verifyWrite(STREAM_C, 3);
         verifyWrite(atMost(1), STREAM_D, 4);
 
-        doAnswer(writeAnswer()).when(writer).write(same(stream(STREAM_C)), eq(3));
+        doAnswer(writeAnswer(false)).when(writer).write(same(stream(STREAM_C)), eq(3));
         assertFalse(write(10));
         verifyWrite(STREAM_A, 1);
         verifyWrite(STREAM_B, 2);
@@ -154,10 +187,10 @@ public class WeightedFairQueueByteDistributorTest {
         setPriority(STREAM_D, STREAM_A, (short) 100, false);
 
         // Update the streams.
-        updateStream(STREAM_A, ALLOCATION_QUANTUM, true);
-        updateStream(STREAM_B, ALLOCATION_QUANTUM, true);
-        updateStream(STREAM_C, ALLOCATION_QUANTUM, true);
-        updateStream(STREAM_D, ALLOCATION_QUANTUM, true);
+        initState(STREAM_A, ALLOCATION_QUANTUM, true);
+        initState(STREAM_B, ALLOCATION_QUANTUM, true);
+        initState(STREAM_C, ALLOCATION_QUANTUM, true);
+        initState(STREAM_D, ALLOCATION_QUANTUM, true);
 
         // Only write 3 * chunkSize, so that we'll only write to the first 3 streams.
         int written = 3 * ALLOCATION_QUANTUM;
@@ -201,12 +234,12 @@ public class WeightedFairQueueByteDistributorTest {
      */
     @Test
     public void emptyFrameAtHeadIsWritten() throws Http2Exception {
-        updateStream(STREAM_A, 0, true);
-        updateStream(STREAM_B, 0, true);
-        updateStream(STREAM_C, 0, true);
-        updateStream(STREAM_D, 10, true);
+        initState(STREAM_A, 0, true);
+        initState(STREAM_B, 0, true);
+        initState(STREAM_C, 0, true);
+        initState(STREAM_D, 10, true);
 
-        stream(STREAM_B).setPriority(STREAM_A, DEFAULT_PRIORITY_WEIGHT, true);
+        setPriority(STREAM_B, STREAM_A, DEFAULT_PRIORITY_WEIGHT, true);
 
         assertFalse(write(10));
         verifyWrite(STREAM_A, 0);
@@ -247,7 +280,7 @@ public class WeightedFairQueueByteDistributorTest {
     @Test
     public void blockedStreamWithDataAndNotAllowedToSendShouldSpreadDataToChildren() throws Http2Exception {
         // A cannot stream.
-        updateStream(STREAM_A, 0, true, false);
+        initState(STREAM_A, 0, true, false);
         blockedStreamShouldSpreadDataToChildren(false);
     }
 
@@ -266,23 +299,23 @@ public class WeightedFairQueueByteDistributorTest {
      */
     @Test
     public void streamWithZeroFlowControlWindowAndDataShouldWriteOnlyOnce() throws Http2Exception {
-        updateStream(STREAM_A, 0, true, true);
+        initState(STREAM_A, 0, true, true);
         blockedStreamShouldSpreadDataToChildren(true);
 
         // Make sure if we call update stream again, A should write 1 more time.
-        updateStream(STREAM_A, 0, true, true);
+        initState(STREAM_A, 0, true, true);
         assertFalse(write(1));
         verifyWrite(times(2), STREAM_A, 0);
 
-        // Try to write again, but since no updateStream A should not write again
+        // Try to write again, but since no initState A should not write again
         assertFalse(write(1));
         verifyWrite(times(2), STREAM_A, 0);
     }
 
     private void blockedStreamShouldSpreadDataToChildren(boolean streamAShouldWriteZero) throws Http2Exception {
-        updateStream(STREAM_B, 10, true);
-        updateStream(STREAM_C, 10, true);
-        updateStream(STREAM_D, 10, true);
+        initState(STREAM_B, 10, true);
+        initState(STREAM_C, 10, true);
+        initState(STREAM_D, 10, true);
 
         // Write up to 10 bytes.
         assertTrue(write(10));
@@ -342,9 +375,9 @@ public class WeightedFairQueueByteDistributorTest {
     @Test
     public void childrenShouldNotSendDataUntilParentBlocked() throws Http2Exception {
         // B cannot stream.
-        updateStream(STREAM_A, 10, true);
-        updateStream(STREAM_C, 10, true);
-        updateStream(STREAM_D, 10, true);
+        initState(STREAM_A, 10, true);
+        initState(STREAM_C, 10, true);
+        initState(STREAM_D, 10, true);
 
         // Write up to 10 bytes.
         assertTrue(write(10));
@@ -371,9 +404,9 @@ public class WeightedFairQueueByteDistributorTest {
     @Test
     public void parentShouldWaterFallDataToChildren() throws Http2Exception {
         // B cannot stream.
-        updateStream(STREAM_A, 5, true);
-        updateStream(STREAM_C, 10, true);
-        updateStream(STREAM_D, 10, true);
+        initState(STREAM_A, 5, true);
+        initState(STREAM_C, 10, true);
+        initState(STREAM_D, 10, true);
 
         // Write up to 10 bytes.
         assertTrue(write(10));
@@ -416,9 +449,9 @@ public class WeightedFairQueueByteDistributorTest {
     @Test
     public void reprioritizeShouldAdjustOutboundFlow() throws Http2Exception {
         // B cannot stream.
-        updateStream(STREAM_A, 10, true);
-        updateStream(STREAM_C, 10, true);
-        updateStream(STREAM_D, 10, true);
+        initState(STREAM_A, 10, true);
+        initState(STREAM_C, 10, true);
+        initState(STREAM_D, 10, true);
 
         // Re-prioritize D as a direct child of the connection.
         setPriority(STREAM_D, 0, DEFAULT_PRIORITY_WEIGHT, false);
@@ -461,7 +494,7 @@ public class WeightedFairQueueByteDistributorTest {
 
         // Send enough so it can not be completely written out
         final int expectedUnsentAmount = 1;
-        updateStream(STREAM_D, writableBytes + expectedUnsentAmount, true);
+        initState(STREAM_D, writableBytes + expectedUnsentAmount, true);
 
         assertTrue(write(writableBytes));
         verifyWrite(STREAM_D, writableBytes);
@@ -488,10 +521,10 @@ public class WeightedFairQueueByteDistributorTest {
         setPriority(STREAM_C, 0, (short) 100, false);
         setPriority(STREAM_D, 0, (short) 100, false);
 
-        updateStream(STREAM_A, 1000, true);
-        updateStream(STREAM_B, 1000, true);
-        updateStream(STREAM_C, 1000, true);
-        updateStream(STREAM_D, 1000, true);
+        initState(STREAM_A, 1000, true);
+        initState(STREAM_B, 1000, true);
+        initState(STREAM_C, 1000, true);
+        initState(STREAM_D, 1000, true);
 
         // Set allocation quantum to 1 so it is easier to see the ratio of total bytes written between each stream.
         distributor.allocationQuantum(1);
@@ -523,10 +556,10 @@ public class WeightedFairQueueByteDistributorTest {
         setPriority(STREAM_C, 0, (short) 100, false);
         setPriority(STREAM_D, 0, (short) 100, false);
 
-        updateStream(STREAM_A, 1000, true);
-        updateStream(STREAM_B, 1000, true);
-        updateStream(STREAM_C, 1000, false);
-        updateStream(STREAM_D, 1000, false);
+        initState(STREAM_A, 1000, true);
+        initState(STREAM_B, 1000, true);
+        initState(STREAM_C, 1000, false);
+        initState(STREAM_D, 1000, false);
 
         // Set allocation quantum to 1 so it is easier to see the ratio of total bytes written between each stream.
         distributor.allocationQuantum(1);
@@ -582,10 +615,10 @@ public class WeightedFairQueueByteDistributorTest {
         setPriority(STREAM_C, 0, DEFAULT_PRIORITY_WEIGHT, false);
         setPriority(STREAM_D, 0, DEFAULT_PRIORITY_WEIGHT, false);
 
-        updateStream(STREAM_A, 400, true);
-        updateStream(STREAM_B, 500, true);
-        updateStream(STREAM_C, 0, true);
-        updateStream(STREAM_D, 700, true);
+        initState(STREAM_A, 400, true);
+        initState(STREAM_B, 500, true);
+        initState(STREAM_C, 0, true);
+        initState(STREAM_D, 700, true);
 
         // Set allocation quantum to 1 so it is easier to see the ratio of total bytes written between each stream.
         distributor.allocationQuantum(1);
@@ -622,12 +655,12 @@ public class WeightedFairQueueByteDistributorTest {
      */
     @Test
     public void zeroDistributeShouldWriteAllZeroFrames() throws Http2Exception {
-        updateStream(STREAM_A, 400, false);
-        updateStream(STREAM_B, 0, true);
-        updateStream(STREAM_C, 0, true);
-        updateStream(STREAM_D, 0, true);
+        initState(STREAM_A, 400, false);
+        initState(STREAM_B, 0, true);
+        initState(STREAM_C, 0, true);
+        initState(STREAM_D, 0, true);
 
-        stream(STREAM_B).setPriority(STREAM_A, DEFAULT_PRIORITY_WEIGHT, true);
+        setPriority(STREAM_B, STREAM_A, DEFAULT_PRIORITY_WEIGHT, true);
 
         assertFalse(write(0));
         verifyNeverWrite(STREAM_A);
@@ -665,12 +698,12 @@ public class WeightedFairQueueByteDistributorTest {
      */
     @Test
     public void nonZeroDistributeShouldWriteAllZeroFramesIfAllEligibleDataIsWritten() throws Http2Exception {
-        updateStream(STREAM_A, 400, false);
-        updateStream(STREAM_B, 100, true);
-        updateStream(STREAM_C, 0, true);
-        updateStream(STREAM_D, 0, true);
+        initState(STREAM_A, 400, false);
+        initState(STREAM_B, 100, true);
+        initState(STREAM_C, 0, true);
+        initState(STREAM_D, 0, true);
 
-        stream(STREAM_B).setPriority(STREAM_A, DEFAULT_PRIORITY_WEIGHT, true);
+        setPriority(STREAM_B, STREAM_A, DEFAULT_PRIORITY_WEIGHT, true);
 
         assertFalse(write(100));
         verifyNeverWrite(STREAM_A);
@@ -707,12 +740,12 @@ public class WeightedFairQueueByteDistributorTest {
      */
     @Test
     public void bytesDistributedWithRestructureShouldBeCorrect() throws Http2Exception {
-        updateStream(STREAM_A, 400, true);
-        updateStream(STREAM_B, 500, true);
-        updateStream(STREAM_C, 600, true);
-        updateStream(STREAM_D, 700, true);
+        initState(STREAM_A, 400, true);
+        initState(STREAM_B, 500, true);
+        initState(STREAM_C, 600, true);
+        initState(STREAM_D, 700, true);
 
-        stream(STREAM_B).setPriority(STREAM_A, DEFAULT_PRIORITY_WEIGHT, true);
+        setPriority(STREAM_B, STREAM_A, DEFAULT_PRIORITY_WEIGHT, true);
 
         assertTrue(write(500));
         assertEquals(400, captureWrites(STREAM_A));
@@ -759,21 +792,14 @@ public class WeightedFairQueueByteDistributorTest {
     @Test
     public void bytesDistributedWithAdditionShouldBeCorrect() throws Http2Exception {
         Http2Stream streamE = connection.local().createStream(STREAM_E, false);
-        streamE.setPriority(STREAM_A, DEFAULT_PRIORITY_WEIGHT, true);
+        setPriority(streamE.id(), STREAM_A, DEFAULT_PRIORITY_WEIGHT, true);
 
         // Send a bunch of data on each stream.
-        final IntObjectMap<Integer> streamSizes = new IntObjectHashMap<Integer>(4);
-        streamSizes.put(STREAM_A, (Integer) 400);
-        streamSizes.put(STREAM_B, (Integer) 500);
-        streamSizes.put(STREAM_C, (Integer) 600);
-        streamSizes.put(STREAM_D, (Integer) 700);
-        streamSizes.put(STREAM_E, (Integer) 900);
-
-        updateStream(STREAM_A, 400, true);
-        updateStream(STREAM_B, 500, true);
-        updateStream(STREAM_C, 600, true);
-        updateStream(STREAM_D, 700, true);
-        updateStream(STREAM_E, 900, true);
+        initState(STREAM_A, 400, true);
+        initState(STREAM_B, 500, true);
+        initState(STREAM_C, 600, true);
+        initState(STREAM_D, 700, true);
+        initState(STREAM_E, 900, true);
 
         assertTrue(write(900));
         assertEquals(400, captureWrites(STREAM_A));
@@ -817,10 +843,10 @@ public class WeightedFairQueueByteDistributorTest {
      */
     @Test
     public void bytesDistributedShouldBeCorrectWithInternalStreamClose() throws Http2Exception {
-        updateStream(STREAM_A, 400, true);
-        updateStream(STREAM_B, 500, true);
-        updateStream(STREAM_C, 600, true);
-        updateStream(STREAM_D, 700, true);
+        initState(STREAM_A, 400, true);
+        initState(STREAM_B, 500, true);
+        initState(STREAM_C, 600, true);
+        initState(STREAM_D, 700, true);
 
         stream(STREAM_A).close();
 
@@ -857,10 +883,10 @@ public class WeightedFairQueueByteDistributorTest {
      */
     @Test
     public void bytesDistributedShouldBeCorrectWithLeafStreamClose() throws Http2Exception {
-        updateStream(STREAM_A, 400, true);
-        updateStream(STREAM_B, 500, true);
-        updateStream(STREAM_C, 600, true);
-        updateStream(STREAM_D, 700, true);
+        initState(STREAM_A, 400, true);
+        initState(STREAM_B, 500, true);
+        initState(STREAM_C, 600, true);
+        initState(STREAM_D, 700, true);
 
         stream(STREAM_C).close();
 
@@ -875,6 +901,25 @@ public class WeightedFairQueueByteDistributorTest {
         assertEquals(500, captureWrites(STREAM_B));
         verifyNeverWrite(STREAM_C);
         assertEquals(700, captureWrites(STREAM_D));
+    }
+
+    @Test
+    public void activeStreamDependentOnNewNonActiveStreamGetsQuantum() throws Http2Exception {
+        setup(0);
+        initState(STREAM_D, 700, true);
+        setPriority(STREAM_D, STREAM_E, DEFAULT_PRIORITY_WEIGHT, true);
+
+        assertFalse(write(700));
+        assertEquals(700, captureWrites(STREAM_D));
+    }
+
+    @Test
+    public void streamWindowLargerThanIntDoesNotInfiniteLoop() throws Http2Exception {
+        initState(STREAM_A, Integer.MAX_VALUE + 1L, true, true);
+        assertTrue(write(Integer.MAX_VALUE));
+        verifyWrite(STREAM_A, Integer.MAX_VALUE);
+        assertFalse(write(1));
+        verifyWrite(STREAM_A, 1);
     }
 
     private boolean write(int numBytes) throws Http2Exception {
@@ -894,54 +939,24 @@ public class WeightedFairQueueByteDistributorTest {
     }
 
     private void verifyNeverWrite(int streamId) {
-        verify(writer, never()).write(same(stream(streamId)), anyInt());
+        verifyNeverWrite(stream(streamId));
     }
 
-    private void setPriority(int streamId, int parent, int weight, boolean exclusive) throws Http2Exception {
-        stream(streamId).setPriority(parent, (short) weight, exclusive);
-    }
-
-    private Http2Stream stream(int streamId) {
-        return connection.stream(streamId);
+    private void verifyNeverWrite(Http2Stream stream) {
+        verify(writer, never()).write(same(stream), anyInt());
     }
 
     private int captureWrites(int streamId) {
+        return captureWrites(stream(streamId));
+    }
+
+    private int captureWrites(Http2Stream stream) {
         ArgumentCaptor<Integer> captor = ArgumentCaptor.forClass(Integer.class);
-        verify(writer, atLeastOnce()).write(same(stream(streamId)), captor.capture());
+        verify(writer, atLeastOnce()).write(same(stream), captor.capture());
         int total = 0;
         for (Integer x : captor.getAllValues()) {
             total += x;
         }
         return total;
-    }
-
-    private void updateStream(final int streamId, final int streamableBytes, final boolean hasFrame) {
-        updateStream(streamId, streamableBytes, hasFrame, hasFrame);
-    }
-
-    private void updateStream(final int streamId, final int pendingBytes, final boolean hasFrame,
-            final boolean isWriteAllowed) {
-        final Http2Stream stream = stream(streamId);
-        distributor.updateStreamableBytes(new StreamByteDistributor.StreamState() {
-            @Override
-            public Http2Stream stream() {
-                return stream;
-            }
-
-            @Override
-            public int pendingBytes() {
-                return pendingBytes;
-            }
-
-            @Override
-            public boolean hasFrame() {
-                return hasFrame;
-            }
-
-            @Override
-            public int windowSize() {
-                return isWriteAllowed ? pendingBytes : -1;
-            }
-        });
     }
 }

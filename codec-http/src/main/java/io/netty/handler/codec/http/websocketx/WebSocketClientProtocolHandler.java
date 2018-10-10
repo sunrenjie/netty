@@ -83,8 +83,8 @@ public class WebSocketClientProtocolHandler extends WebSocketProtocolHandler {
      *            with the websocket specifications. Client applications that communicate with a non-standard server
      *            which doesn't require masking might set this to false to achieve a higher performance.
      * @param allowMaskMismatch
-     *            Allows to loosen the masking requirement on received frames. When this is set to false then also
-     *            frames which are not masked properly according to the standard will still be accepted.
+     *            When set to true, frames which are not masked properly according to the standard will still be
+     *            accepted.
      */
     public WebSocketClientProtocolHandler(URI webSocketURL, WebSocketVersion version, String subprotocol,
                                           boolean allowExtensions, HttpHeaders customHeaders,
@@ -151,6 +151,23 @@ public class WebSocketClientProtocolHandler extends WebSocketProtocolHandler {
      *            {@code true} if close frames should not be forwarded and just close the channel
      */
     public WebSocketClientProtocolHandler(WebSocketClientHandshaker handshaker, boolean handleCloseFrames) {
+        this(handshaker, handleCloseFrames, true);
+    }
+
+    /**
+     * Base constructor
+     *
+     * @param handshaker
+     *            The {@link WebSocketClientHandshaker} which will be used to issue the handshake once the connection
+     *            was established to the remote peer.
+     * @param handleCloseFrames
+     *            {@code true} if close frames should not be forwarded and just close the channel
+     * @param dropPongFrames
+     *            {@code true} if pong frames should not be forwarded
+     */
+    public WebSocketClientProtocolHandler(WebSocketClientHandshaker handshaker, boolean handleCloseFrames,
+                                          boolean dropPongFrames) {
+        super(dropPongFrames);
         this.handshaker = handshaker;
         this.handleCloseFrames = handleCloseFrames;
     }

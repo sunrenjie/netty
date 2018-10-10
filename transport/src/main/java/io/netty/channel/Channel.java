@@ -22,10 +22,7 @@ import io.netty.channel.socket.DatagramPacket;
 import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.util.AttributeMap;
-import io.netty.util.concurrent.EventExecutor;
-import io.netty.util.concurrent.FutureListener;
 
-import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 
@@ -201,7 +198,6 @@ public interface Channel extends AttributeMap, ChannelOutboundInvoker, Comparabl
      * are only provided to implement the actual transport, and must be invoked from an I/O thread except for the
      * following methods:
      * <ul>
-     *   <li>{@link #invoker()}</li>
      *   <li>{@link #localAddress()}</li>
      *   <li>{@link #remoteAddress()}</li>
      *   <li>{@link #closeForcibly()}</li>

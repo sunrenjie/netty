@@ -18,8 +18,10 @@ package io.netty.handler.codec.http2;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.util.IllegalReferenceCountException;
+import io.netty.util.internal.StringUtil;
 import io.netty.util.internal.UnstableApi;
 
+import static io.netty.handler.codec.http2.Http2CodecUtil.verifyPadding;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
 
 /**
@@ -30,6 +32,7 @@ public final class DefaultHttp2DataFrame extends AbstractHttp2StreamFrame implem
     private final ByteBuf content;
     private final boolean endStream;
     private final int padding;
+    private final int initialFlowControlledBytes;
 
     /**
      * Equivalent to {@code new DefaultHttp2DataFrame(content, false)}.
@@ -64,21 +67,29 @@ public final class DefaultHttp2DataFrame extends AbstractHttp2StreamFrame implem
      *
      * @param content non-{@code null} payload
      * @param endStream whether this data should terminate the stream
-     * @param padding additional bytes that should be added to obscure the true content size
+     * @param padding additional bytes that should be added to obscure the true content size. Must be between 0 and
+     *                256 (inclusive).
      */
     public DefaultHttp2DataFrame(ByteBuf content, boolean endStream, int padding) {
         this.content = checkNotNull(content, "content");
         this.endStream = endStream;
-        if (padding < 0 || padding > Http2CodecUtil.MAX_UNSIGNED_BYTE) {
-            throw new IllegalArgumentException("padding must be non-negative and less than 256");
-        }
+        verifyPadding(padding);
         this.padding = padding;
+        if (content().readableBytes() + (long) padding > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("content + padding must be <= Integer.MAX_VALUE");
+        }
+        initialFlowControlledBytes = content().readableBytes() + padding;
     }
 
     @Override
-    public DefaultHttp2DataFrame setStream(Object stream) {
-      super.setStream(stream);
-      return this;
+    public DefaultHttp2DataFrame stream(Http2FrameStream stream) {
+        super.stream(stream);
+        return this;
+    }
+
+    @Override
+    public String name() {
+        return "DATA";
     }
 
     @Override
@@ -97,6 +108,11 @@ public final class DefaultHttp2DataFrame extends AbstractHttp2StreamFrame implem
             throw new IllegalReferenceCountException(content.refCnt());
         }
         return content;
+    }
+
+    @Override
+    public int initialFlowControlledBytes() {
+        return initialFlowControlledBytes;
     }
 
     @Override
@@ -148,8 +164,8 @@ public final class DefaultHttp2DataFrame extends AbstractHttp2StreamFrame implem
 
     @Override
     public String toString() {
-        return "DefaultHttp2DataFrame(stream=" + stream() + ", content=" + content
-            + ", endStream=" + endStream + ", padding=" + padding + ")";
+        return StringUtil.simpleClassName(this) + "(stream=" + stream() + ", content=" + content
+               + ", endStream=" + endStream + ", padding=" + padding + ')';
     }
 
     @Override

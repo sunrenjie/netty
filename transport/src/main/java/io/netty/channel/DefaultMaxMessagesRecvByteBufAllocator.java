@@ -17,6 +17,7 @@ package io.netty.channel;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
+import io.netty.util.UncheckedBooleanSupplier;
 
 /**
  * Default implementation of {@link MaxMessagesRecvByteBufAllocator} which respects {@link ChannelConfig#isAutoRead()}
@@ -24,6 +25,7 @@ import io.netty.buffer.ByteBufAllocator;
  */
 public abstract class DefaultMaxMessagesRecvByteBufAllocator implements MaxMessagesRecvByteBufAllocator {
     private volatile int maxMessagesPerRead;
+    private volatile boolean respectMaybeMoreData = true;
 
     public DefaultMaxMessagesRecvByteBufAllocator() {
         this(1);
@@ -48,15 +50,54 @@ public abstract class DefaultMaxMessagesRecvByteBufAllocator implements MaxMessa
     }
 
     /**
+     * Determine if future instances of {@link #newHandle()} will stop reading if we think there is no more data.
+     * @param respectMaybeMoreData
+     * <ul>
+     *     <li>{@code true} to stop reading if we think there is no more data. This may save a system call to read from
+     *          the socket, but if data has arrived in a racy fashion we may give up our {@link #maxMessagesPerRead()}
+     *          quantum and have to wait for the selector to notify us of more data.</li>
+     *     <li>{@code false} to keep reading (up to {@link #maxMessagesPerRead()}) or until there is no data when we
+     *          attempt to read.</li>
+     * </ul>
+     * @return {@code this}.
+     */
+    public DefaultMaxMessagesRecvByteBufAllocator respectMaybeMoreData(boolean respectMaybeMoreData) {
+        this.respectMaybeMoreData = respectMaybeMoreData;
+        return this;
+    }
+
+    /**
+     * Get if future instances of {@link #newHandle()} will stop reading if we think there is no more data.
+     * @return
+     * <ul>
+     *     <li>{@code true} to stop reading if we think there is no more data. This may save a system call to read from
+     *          the socket, but if data has arrived in a racy fashion we may give up our {@link #maxMessagesPerRead()}
+     *          quantum and have to wait for the selector to notify us of more data.</li>
+     *     <li>{@code false} to keep reading (up to {@link #maxMessagesPerRead()}) or until there is no data when we
+     *          attempt to read.</li>
+     * </ul>
+     */
+    public final boolean respectMaybeMoreData() {
+        return respectMaybeMoreData;
+    }
+
+    /**
      * Focuses on enforcing the maximum messages per read condition for {@link #continueReading()}.
      */
-    public abstract class MaxMessageHandle implements Handle {
+    public abstract class MaxMessageHandle implements ExtendedHandle {
         private ChannelConfig config;
         private int maxMessagePerRead;
         private int totalMessages;
         private int totalBytesRead;
         private int attemptedBytesRead;
         private int lastBytesRead;
+        private final boolean respectMaybeMoreData = DefaultMaxMessagesRecvByteBufAllocator.this.respectMaybeMoreData;
+        private final UncheckedBooleanSupplier defaultMaybeMoreSupplier = new UncheckedBooleanSupplier() {
+            @Override
+            public boolean get() {
+                return attemptedBytesRead == lastBytesRead;
+            }
+        };
 
         /**
          * Only {@link ChannelConfig#getMaxMessagesPerRead()} is used.
@@ -79,13 +120,10 @@ public abstract class DefaultMaxMessagesRecvByteBufAllocator implements MaxMessa
         }
 
         @Override
-        public final void lastBytesRead(int bytes) {
+        public void lastBytesRead(int bytes) {
             lastBytesRead = bytes;
-            // Ignore if bytes is negative, the interface contract states it will be detected externally after call.
-            // The value may be "invalid" after this point, but it doesn't matter because reading will be stopped.
-            totalBytesRead += bytes;
-            if (totalBytesRead < 0) {
-                totalBytesRead = Integer.MAX_VALUE;
+            if (bytes > 0) {
+                totalBytesRead += bytes;
             }
         }
 
@@ -96,10 +134,15 @@ public abstract class DefaultMaxMessagesRecvByteBufAllocator implements MaxMessa
 
         @Override
         public boolean continueReading() {
+            return continueReading(defaultMaybeMoreSupplier);
+        }
+
+        @Override
+        public boolean continueReading(UncheckedBooleanSupplier maybeMoreDataSupplier) {
             return config.isAutoRead() &&
-                   attemptedBytesRead == lastBytesRead &&
+                   (!respectMaybeMoreData || maybeMoreDataSupplier.get()) &&
                    totalMessages < maxMessagePerRead &&
-                   totalBytesRead < Integer.MAX_VALUE;
+                   totalBytesRead > 0;
         }
 
         @Override
@@ -117,7 +160,7 @@ public abstract class DefaultMaxMessagesRecvByteBufAllocator implements MaxMessa
         }
 
         protected final int totalBytesRead() {
-            return totalBytesRead;
+            return totalBytesRead < 0 ? Integer.MAX_VALUE : totalBytesRead;
         }
     }
 }

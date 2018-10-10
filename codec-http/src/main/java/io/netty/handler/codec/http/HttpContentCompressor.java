@@ -15,10 +15,10 @@
  */
 package io.netty.handler.codec.http;
 
+import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.compression.ZlibCodecFactory;
 import io.netty.handler.codec.compression.ZlibWrapper;
-import io.netty.util.internal.StringUtil;
 
 /**
  * Compresses an {@link HttpMessage} and an {@link HttpContent} in {@code gzip} or
@@ -32,6 +32,8 @@ public class HttpContentCompressor extends HttpContentEncoder {
     private final int compressionLevel;
     private final int windowBits;
     private final int memLevel;
+    private final int contentSizeThreshold;
+    private ChannelHandlerContext ctx;
 
     /**
      * Creates a new handler with the default compression level (<tt>6</tt>),
@@ -51,7 +53,7 @@ public class HttpContentCompressor extends HttpContentEncoder {
      *        compression level is {@code 6}.
      */
     public HttpContentCompressor(int compressionLevel) {
-        this(compressionLevel, 15, 8);
+        this(compressionLevel, 15, 8, 0);
     }
 
     /**
@@ -74,6 +76,33 @@ public class HttpContentCompressor extends HttpContentEncoder {
      *        at the expense of memory usage.  The default value is {@code 8}
      */
     public HttpContentCompressor(int compressionLevel, int windowBits, int memLevel) {
+        this(compressionLevel, windowBits, memLevel, 0);
+    }
+
+    /**
+     * Creates a new handler with the specified compression level, window size,
+     * and memory level..
+     *
+     * @param compressionLevel
+     *        {@code 1} yields the fastest compression and {@code 9} yields the
+     *        best compression.  {@code 0} means no compression.  The default
+     *        compression level is {@code 6}.
+     * @param windowBits
+     *        The base two logarithm of the size of the history buffer.  The
+     *        value should be in the range {@code 9} to {@code 15} inclusive.
+     *        Larger values result in better compression at the expense of
+     *        memory usage.  The default value is {@code 15}.
+     * @param memLevel
+     *        How much memory should be allocated for the internal compression
+     *        state.  {@code 1} uses minimum memory and {@code 9} uses maximum
+     *        memory.  Larger values result in better and faster compression
+     *        at the expense of memory usage.  The default value is {@code 8}
+     * @param contentSizeThreshold
+     *        The response body is compressed when the size of the response
+     *        body exceeds the threshold. The value should be a non negative
+     *        number. {@code 0} will enable compression for all responses.
+     */
+    public HttpContentCompressor(int compressionLevel, int windowBits, int memLevel, int contentSizeThreshold) {
         if (compressionLevel < 0 || compressionLevel > 9) {
             throw new IllegalArgumentException(
                     "compressionLevel: " + compressionLevel +
@@ -87,16 +116,34 @@ public class HttpContentCompressor extends HttpContentEncoder {
             throw new IllegalArgumentException(
                     "memLevel: " + memLevel + " (expected: 1-9)");
         }
+        if (contentSizeThreshold < 0) {
+            throw new IllegalArgumentException(
+                    "contentSizeThreshold: " + contentSizeThreshold + " (expected: non negative number)");
+        }
         this.compressionLevel = compressionLevel;
         this.windowBits = windowBits;
         this.memLevel = memLevel;
+        this.contentSizeThreshold = contentSizeThreshold;
+    }
+
+    @Override
+    public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
+        this.ctx = ctx;
     }
 
     @Override
     protected Result beginEncode(HttpResponse headers, String acceptEncoding) throws Exception {
+        if (this.contentSizeThreshold > 0) {
+            if (headers instanceof HttpContent &&
+                    ((HttpContent) headers).content().readableBytes() < contentSizeThreshold) {
+                return null;
+            }
+        }
+
         String contentEncoding = headers.headers().get(HttpHeaderNames.CONTENT_ENCODING);
-        if (contentEncoding != null &&
-            !HttpHeaderValues.IDENTITY.contentEqualsIgnoreCase(contentEncoding)) {
+        if (contentEncoding != null) {
+            // Content-Encoding was set, either as something specific or as the IDENTITY encoding
+            // Therefore, we should NOT encode here
             return null;
         }
 
@@ -119,7 +166,8 @@ public class HttpContentCompressor extends HttpContentEncoder {
 
         return new Result(
                 targetContentEncoding,
-                new EmbeddedChannel(ZlibCodecFactory.newZlibEncoder(
+                new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
+                        ctx.channel().config(), ZlibCodecFactory.newZlibEncoder(
                         wrapper, compressionLevel, windowBits, memLevel)));
     }
 
@@ -128,12 +176,12 @@ public class HttpContentCompressor extends HttpContentEncoder {
         float starQ = -1.0f;
         float gzipQ = -1.0f;
         float deflateQ = -1.0f;
-        for (String encoding: StringUtil.split(acceptEncoding, ',')) {
+        for (String encoding : acceptEncoding.split(",")) {
             float q = 1.0f;
             int equalsPos = encoding.indexOf('=');
             if (equalsPos != -1) {
                 try {
-                    q = Float.valueOf(encoding.substring(equalsPos + 1));
+                    q = Float.parseFloat(encoding.substring(equalsPos + 1));
                 } catch (NumberFormatException e) {
                     // Ignore encoding
                     q = 0.0f;

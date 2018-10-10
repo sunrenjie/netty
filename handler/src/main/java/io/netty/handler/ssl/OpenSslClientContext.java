@@ -15,22 +15,23 @@
  */
 package io.netty.handler.ssl;
 
-import org.apache.tomcat.jni.SSL;
-import org.apache.tomcat.jni.SSLContext;
+import io.netty.internal.tcnative.SSL;
+
+import java.io.File;
+import java.security.PrivateKey;
+import java.security.cert.X509Certificate;
 
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLException;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
-import javax.net.ssl.X509ExtendedTrustManager;
-import javax.net.ssl.X509TrustManager;
-import java.io.File;
-import java.security.KeyStore;
-import java.security.PrivateKey;
-import java.security.cert.X509Certificate;
+
+import static io.netty.handler.ssl.ReferenceCountedOpenSslClientContext.newSessionContext;
 
 /**
  * A client-side {@link SslContext} which uses OpenSSL's SSL/TLS implementation.
+ * <p>This class will use a finalizer to ensure native resources are automatically cleaned up. To avoid finalizers
+ * and manually release the native memory see {@link ReferenceCountedOpenSslClientContext}.
  */
 public final class OpenSslClientContext extends OpenSslContext {
     private final OpenSslSessionContext sessionContext;
@@ -174,107 +175,26 @@ public final class OpenSslClientContext extends OpenSslContext {
             throws SSLException {
         this(toX509CertificatesInternal(trustCertCollectionFile), trustManagerFactory,
                 toX509CertificatesInternal(keyCertChainFile), toPrivateKeyInternal(keyFile, keyPassword),
-                keyPassword, keyManagerFactory, ciphers, cipherFilter, apn, sessionCacheSize, sessionTimeout);
+                keyPassword, keyManagerFactory, ciphers, cipherFilter, apn, null, sessionCacheSize,
+                sessionTimeout, false);
     }
 
-    @SuppressWarnings("deprecation")
     OpenSslClientContext(X509Certificate[] trustCertCollection, TrustManagerFactory trustManagerFactory,
                          X509Certificate[] keyCertChain, PrivateKey key, String keyPassword,
                                 KeyManagerFactory keyManagerFactory, Iterable<String> ciphers,
-                                CipherSuiteFilter cipherFilter, ApplicationProtocolConfig apn,
-                                long sessionCacheSize, long sessionTimeout)
+                                CipherSuiteFilter cipherFilter, ApplicationProtocolConfig apn, String[] protocols,
+                                long sessionCacheSize, long sessionTimeout, boolean enableOcsp)
             throws SSLException {
         super(ciphers, cipherFilter, apn, sessionCacheSize, sessionTimeout, SSL.SSL_MODE_CLIENT, keyCertChain,
-                ClientAuth.NONE);
+                ClientAuth.NONE, protocols, false, enableOcsp);
         boolean success = false;
         try {
-            checkKeyManagerFactory(keyManagerFactory);
-            if (key == null && keyCertChain != null || key != null && keyCertChain == null) {
-                throw new IllegalArgumentException(
-                        "Either both keyCertChain and key needs to be null or none of them");
-            }
-            synchronized (OpenSslContext.class) {
-                if (keyCertChain != null && key != null) {
-                    /* Load the certificate file and private key. */
-                    long keyBio = 0;
-                    long keyCertChainBio = 0;
-
-                    try {
-                        keyCertChainBio = toBIO(keyCertChain);
-
-                        keyBio = toBIO(key);
-
-                        if (!SSLContext.setCertificateBio(
-                                ctx, keyCertChainBio, keyBio, keyPassword, SSL.SSL_AIDX_RSA)) {
-                            long error = SSL.getLastErrorNumber();
-                            if (OpenSsl.isError(error)) {
-                                throw new SSLException("failed to set certificate and key: "
-                                                       + SSL.getErrorString(error));
-                            }
-                        }
-                        // We may have more then one cert in the chain so add all of them now. We must NOT skip the
-                        // first cert when client mode.
-                        if (!SSLContext.setCertificateChainBio(ctx, keyCertChainBio, false)) {
-                            long error = SSL.getLastErrorNumber();
-                            if (OpenSsl.isError(error)) {
-                                throw new SSLException(
-                                        "failed to set certificate chain: " + SSL.getErrorString(error));
-                            }
-                        }
-                    } catch (SSLException e) {
-                        throw e;
-                    } catch (Exception e) {
-                        throw new SSLException("failed to set certificate and key", e);
-                    } finally {
-                        if (keyBio != 0) {
-                            SSL.freeBIO(keyBio);
-                        }
-                        if (keyCertChainBio != 0) {
-                            SSL.freeBIO(keyCertChainBio);
-                        }
-                    }
-                }
-
-                SSLContext.setVerify(ctx, SSL.SSL_VERIFY_NONE, VERIFY_DEPTH);
-
-                try {
-                    if (trustCertCollection != null) {
-                        trustManagerFactory = buildTrustManagerFactory(trustCertCollection, trustManagerFactory);
-                    } else if (trustManagerFactory == null) {
-                        trustManagerFactory = TrustManagerFactory.getInstance(
-                                TrustManagerFactory.getDefaultAlgorithm());
-                        trustManagerFactory.init((KeyStore) null);
-                    }
-                    final X509TrustManager manager = chooseTrustManager(trustManagerFactory.getTrustManagers());
-
-                    // Use this to prevent an error when running on java < 7
-                    if (useExtendedTrustManager(manager)) {
-                        final X509ExtendedTrustManager extendedManager = (X509ExtendedTrustManager) manager;
-                        SSLContext.setCertVerifyCallback(ctx, new AbstractCertificateVerifier() {
-                            @Override
-                            void verify(OpenSslEngine engine, X509Certificate[] peerCerts, String auth)
-                                    throws Exception {
-                                extendedManager.checkServerTrusted(peerCerts, auth, engine);
-                            }
-                        });
-                    } else {
-                        SSLContext.setCertVerifyCallback(ctx, new AbstractCertificateVerifier() {
-                            @Override
-                            void verify(OpenSslEngine engine, X509Certificate[] peerCerts, String auth)
-                                    throws Exception {
-                                manager.checkServerTrusted(peerCerts, auth);
-                            }
-                        });
-                    }
-                } catch (Exception e) {
-                    throw new SSLException("unable to setup trustmanager", e);
-                }
-            }
-            sessionContext = new OpenSslClientSessionContext(ctx);
+            sessionContext = newSessionContext(this, ctx, engineMap, trustCertCollection, trustManagerFactory,
+                                               keyCertChain, key, keyPassword, keyManagerFactory);
             success = true;
         } finally {
             if (!success) {
-                destroy();
+                release();
             }
         }
     }
@@ -284,44 +204,8 @@ public final class OpenSslClientContext extends OpenSslContext {
         return sessionContext;
     }
 
-    // No cache is currently supported for client side mode.
-    private static final class OpenSslClientSessionContext extends OpenSslSessionContext {
-        private OpenSslClientSessionContext(long context) {
-            super(context);
-        }
-
-        @Override
-        public void setSessionTimeout(int seconds) {
-            if (seconds < 0) {
-                throw new IllegalArgumentException();
-            }
-        }
-
-        @Override
-        public int getSessionTimeout() {
-            return 0;
-        }
-
-        @Override
-        public void setSessionCacheSize(int size)  {
-            if (size < 0) {
-                throw new IllegalArgumentException();
-            }
-        }
-
-        @Override
-        public int getSessionCacheSize() {
-            return 0;
-        }
-
-        @Override
-        public void setSessionCacheEnabled(boolean enabled) {
-            // ignored
-        }
-
-        @Override
-        public boolean isSessionCacheEnabled() {
-            return false;
-        }
+    @Override
+    OpenSslKeyMaterialManager keyMaterialManager() {
+        return null;
     }
 }

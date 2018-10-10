@@ -15,6 +15,7 @@
  */
 package io.netty.handler.codec.http2;
 
+import io.netty.util.internal.StringUtil;
 import io.netty.util.internal.UnstableApi;
 
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
@@ -24,6 +25,7 @@ import static io.netty.util.internal.ObjectUtil.checkNotNull;
  */
 @UnstableApi
 public final class DefaultHttp2ResetFrame extends AbstractHttp2StreamFrame implements Http2ResetFrame {
+
     private final long errorCode;
 
     /**
@@ -32,7 +34,7 @@ public final class DefaultHttp2ResetFrame extends AbstractHttp2StreamFrame imple
      * @param error the non-{@code null} reason for reset
      */
     public DefaultHttp2ResetFrame(Http2Error error) {
-        this.errorCode = checkNotNull(error, "error").code();
+        errorCode = checkNotNull(error, "error").code();
     }
 
     /**
@@ -45,9 +47,14 @@ public final class DefaultHttp2ResetFrame extends AbstractHttp2StreamFrame imple
     }
 
     @Override
-    public DefaultHttp2ResetFrame setStream(Object stream) {
-      super.setStream(stream);
-      return this;
+    public DefaultHttp2ResetFrame stream(Http2FrameStream stream) {
+        super.stream(stream);
+        return this;
+    }
+
+    @Override
+    public String name() {
+        return "RST_STREAM";
     }
 
     @Override
@@ -57,7 +64,7 @@ public final class DefaultHttp2ResetFrame extends AbstractHttp2StreamFrame imple
 
     @Override
     public String toString() {
-        return "DefaultHttp2ResetFrame(stream=" + stream() + "errorCode=" + errorCode + ")";
+        return StringUtil.simpleClassName(this) + "(stream=" + stream() + ", errorCode=" + errorCode + ')';
     }
 
     @Override

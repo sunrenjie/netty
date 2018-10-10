@@ -77,6 +77,9 @@ public class DefaultSctpChannelConfig extends DefaultChannelConfig implements Sc
         if (option == SCTP_NODELAY) {
             return (T) Boolean.valueOf(isSctpNoDelay());
         }
+        if (option == SCTP_INIT_MAXSTREAMS) {
+            return (T) getInitMaxStreams();
+        }
         return super.getOption(option);
     }
 
@@ -219,14 +222,12 @@ public class DefaultSctpChannelConfig extends DefaultChannelConfig implements Sc
     }
 
     @Override
-    @Deprecated
     public SctpChannelConfig setWriteBufferHighWaterMark(int writeBufferHighWaterMark) {
         super.setWriteBufferHighWaterMark(writeBufferHighWaterMark);
         return this;
     }
 
     @Override
-    @Deprecated
     public SctpChannelConfig setWriteBufferLowWaterMark(int writeBufferLowWaterMark) {
         super.setWriteBufferLowWaterMark(writeBufferLowWaterMark);
         return this;

@@ -34,9 +34,6 @@ import java.util.List;
  * A <a href="http://tools.ietf.org/html/rfc6265">RFC6265</a> compliant cookie encoder to be used client side, so
  * only name=value pairs are sent.
  *
- * User-Agents are not supposed to interpret cookies, so, if present, {@link Cookie#rawValue()} will be used.
- * Otherwise, {@link Cookie#value()} will be used unquoted.
- *
  * Note that multiple cookies are supposed to be sent at once in a single "Cookie" header.
  *
  * <pre>
@@ -164,7 +161,7 @@ public final class ClientCookieEncoder extends CookieEncoder {
             if (cookies.size() == 1) {
                 encode(buf, cookies.iterator().next());
             } else {
-                Cookie[] cookiesSorted = cookies.toArray(new Cookie[cookies.size()]);
+                Cookie[] cookiesSorted = cookies.toArray(new Cookie[0]);
                 Arrays.sort(cookiesSorted, COOKIE_COMPARATOR);
                 for (Cookie c : cookiesSorted) {
                     encode(buf, c);
@@ -201,7 +198,7 @@ public final class ClientCookieEncoder extends CookieEncoder {
                 while (cookiesIt.hasNext()) {
                     cookiesList.add(cookiesIt.next());
                 }
-                Cookie[] cookiesSorted = cookiesList.toArray(new Cookie[cookiesList.size()]);
+                Cookie[] cookiesSorted = cookiesList.toArray(new Cookie[0]);
                 Arrays.sort(cookiesSorted, COOKIE_COMPARATOR);
                 for (Cookie c : cookiesSorted) {
                     encode(buf, c);

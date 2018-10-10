@@ -29,7 +29,10 @@ import static io.netty.channel.ChannelOption.SO_BACKLOG;
 
 /**
  * The default {@link UdtServerChannelConfig} implementation.
+ *
+ * @deprecated The UDT transport is no longer maintained and will be removed.
  */
+@Deprecated
 public class DefaultUdtServerChannelConfig extends DefaultUdtChannelConfig
         implements UdtServerChannelConfig {
 
@@ -181,14 +184,12 @@ public class DefaultUdtServerChannelConfig extends DefaultUdtChannelConfig
     }
 
     @Override
-    @Deprecated
     public UdtServerChannelConfig setWriteBufferLowWaterMark(int writeBufferLowWaterMark) {
         super.setWriteBufferLowWaterMark(writeBufferLowWaterMark);
         return this;
     }
 
     @Override
-    @Deprecated
     public UdtServerChannelConfig setWriteBufferHighWaterMark(int writeBufferHighWaterMark) {
         super.setWriteBufferHighWaterMark(writeBufferHighWaterMark);
         return this;

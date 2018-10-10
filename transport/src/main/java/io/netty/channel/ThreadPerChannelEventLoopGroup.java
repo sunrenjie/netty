@@ -27,6 +27,7 @@ import io.netty.util.concurrent.ThreadPerTaskExecutor;
 import io.netty.util.internal.EmptyArrays;
 import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.ReadOnlyIterator;
+import io.netty.util.internal.ThrowableUtil;
 
 import java.util.Collections;
 import java.util.Iterator;
@@ -77,7 +78,7 @@ public class ThreadPerChannelEventLoopGroup extends AbstractEventExecutorGroup i
      * @param maxChannels       the maximum number of channels to handle with this instance. Once you try to register
      *                          a new {@link Channel} and the maximum is exceed it will throw an
      *                          {@link ChannelException}. on the {@link #register(Channel)} and
-     *                          {@link #register(Channel, ChannelPromise)} method.
+     *                          {@link #register(ChannelPromise)} method.
      *                          Use {@code 0} to use no limit
      */
     protected ThreadPerChannelEventLoopGroup(int maxChannels) {
@@ -90,7 +91,7 @@ public class ThreadPerChannelEventLoopGroup extends AbstractEventExecutorGroup i
      * @param maxChannels       the maximum number of channels to handle with this instance. Once you try to register
      *                          a new {@link Channel} and the maximum is exceed it will throw an
      *                          {@link ChannelException} on the {@link #register(Channel)} and
-     *                          {@link #register(Channel, ChannelPromise)} method.
+     *                          {@link #register(ChannelPromise)} method.
      *                          Use {@code 0} to use no limit
      * @param threadFactory     the {@link ThreadFactory} used to create new {@link Thread} instances that handle the
      *                          registered {@link Channel}s
@@ -106,7 +107,7 @@ public class ThreadPerChannelEventLoopGroup extends AbstractEventExecutorGroup i
      * @param maxChannels       the maximum number of channels to handle with this instance. Once you try to register
      *                          a new {@link Channel} and the maximum is exceed it will throw an
      *                          {@link ChannelException} on the {@link #register(Channel)} and
-     *                          {@link #register(Channel, ChannelPromise)} method.
+     *                          {@link #register(ChannelPromise)} method.
      *                          Use {@code 0} to use no limit
      * @param executor          the {@link Executor} used to create new {@link Thread} instances that handle the
      *                          registered {@link Channel}s
@@ -130,8 +131,9 @@ public class ThreadPerChannelEventLoopGroup extends AbstractEventExecutorGroup i
         this.maxChannels = maxChannels;
         this.executor = executor;
 
-        tooManyChannels = new ChannelException("too many channels (max: " + maxChannels + ')');
-        tooManyChannels.setStackTrace(EmptyArrays.EMPTY_STACK_TRACE);
+        tooManyChannels = ThrowableUtil.unknownStackTrace(
+                new ChannelException("too many channels (max: " + maxChannels + ')'),
+                ThreadPerChannelEventLoopGroup.class, "nextChild()");
     }
 
     /**
@@ -274,12 +276,23 @@ public class ThreadPerChannelEventLoopGroup extends AbstractEventExecutorGroup i
         }
         try {
             EventLoop l = nextChild();
-            return l.register(channel, new DefaultChannelPromise(channel, l));
+            return l.register(new DefaultChannelPromise(channel, l));
         } catch (Throwable t) {
             return new FailedChannelFuture(channel, GlobalEventExecutor.INSTANCE, t);
         }
     }
 
+    @Override
+    public ChannelFuture register(ChannelPromise promise) {
+        try {
+            return nextChild().register(promise);
+        } catch (Throwable t) {
+            promise.setFailure(t);
+            return promise;
+        }
+    }
+
+    @Deprecated
     @Override
     public ChannelFuture register(Channel channel, ChannelPromise promise) {
         if (channel == null) {
