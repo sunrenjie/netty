@@ -5,7 +5,6 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelConfig;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
-import io.netty.util.internal.OneTimeTask;
 
 import java.util.concurrent.TimeUnit;
 
@@ -92,7 +91,7 @@ public class FileClientHandler extends SimpleChannelInboundHandler<Object> {
                 final ChannelConfig config = ctx.channel().config();
                 if (config.isAutoRead()) {
                     config.setAutoRead(false);
-                    ctx.channel().eventLoop().schedule(new OneTimeTask() {
+                    ctx.channel().eventLoop().schedule(new Runnable() {
                         @Override
                         public void run() {
                             config.setAutoRead(true);
