@@ -1,0 +1,9 @@
+# The local port on which the relay listens
+local.port = 8080
+
+# The address and account of the remote HTTPS tunnel server
+remote.host = demo.https-tunnel.com
+remote.port = 443
+remote.username = username
+remote.password = password
+
