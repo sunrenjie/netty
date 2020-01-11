@@ -8,3 +8,7 @@ remote.server = demo.https-tunnel.com
 remote.servers = demo1.https-tunnel.com,demo2.https-tunnel.com:1443
 remote.username = username
 remote.password = password
+
+# Regular expression list that if any one is matched against anywhere in the requested URI successfully, the request
+# shall be rejected.
+proxy.blacklist = evil, gaming

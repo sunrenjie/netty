@@ -34,8 +34,18 @@ import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.DefaultLastHttpContent;
 import io.netty.util.ReferenceCountUtil;
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
+
+import java.net.InetAddress;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.UnknownHostException;
+import java.util.regex.Pattern;
 
 public class ProxyRelayClientHandler extends ChannelInboundHandlerAdapter {
+    private static final InternalLogger logger = InternalLoggerFactory.getInstance(ProxyRelayClientHandler.class);
+
     private final String id;
     private Channel clientChannel;
     private Channel remoteChannel;
@@ -45,6 +55,7 @@ public class ProxyRelayClientHandler extends ChannelInboundHandlerAdapter {
     private static final int defaultProxyServerPort = 443;
     private static Server proxyServer = loadRemoteServer("remote.server");
     private static final Server[] proxyServerPool = loadRemoteServers("remote.servers");
+    private static final Pattern[] blackLists = loadBlackLists("proxy.blacklist");
 
     private static Server[] loadRemoteServers(String key) {
         return Server.loadServers(ConfigPropertyLoader.getProperty(key, null), defaultProxyServerPort);
@@ -64,6 +75,60 @@ public class ProxyRelayClientHandler extends ChannelInboundHandlerAdapter {
             throw new RuntimeException("no remote server is configured");
         }
         proxyServer = RemoteConnectionPoolTester.startAndSelectTheBestServer(loop, proxyServerPool, 10000);
+    }
+
+    private static Pattern[] loadBlackLists(String key) {
+        String ps = ConfigPropertyLoader.getProperty(key, null);
+        if (ps == null || ps.length() == 0) {
+            return null;
+        }
+        String[] ss = Utility.trimStrings(ps.split(","));
+        Pattern[] ret = new Pattern[ss.length];
+        for (int i = 0; i < ss.length; i++) {
+            // In order for the pattern to actually match in anywhere in the request string, ".*" is added to the
+            // beginning and ending of the pattern.
+            ret[i] = Pattern.compile(".*" + ss[i] + ".*", Pattern.CASE_INSENSITIVE);
+        }
+        return ret;
+    }
+
+    private static boolean isInBlackList(String uri) {
+        try {
+            if (!uri.contains("://")) { // For HTTPS tunnel request, URI has no "https://" prefix.
+                uri = "https://" + uri;
+            }
+            URL url = new URL(uri);
+            String host = url.getHost();
+            // Check black list
+            if (blackLists != null) {
+                for (Pattern p: blackLists) {
+                    if (p.matcher(host).matches()) {
+                        logger.info(String.format("Requested URI %s matches successfully the pattern %s in blacklist",
+                                uri, p.toString()));
+                        return true;
+                    }
+                }
+            }
+            // Check for local IPs.
+            char c = host.charAt(0);
+            if (c >= '0' && c <= '9') { // literal IP, for which InetAddress.getByName() is offline.
+                InetAddress a = InetAddress.getByName(host);
+                if (a.isLinkLocalAddress() || a.isAnyLocalAddress() || a.isLoopbackAddress() ||
+                        a.isSiteLocalAddress()) {
+                    logger.info(String.format("The requested URI %s is a local address.", uri));
+                    return true;
+                }
+            }
+            return false;
+        } catch (MalformedURLException ex) {
+            // Caused by new URL().
+            logger.debug(String.format("The requested URI %s causes %s", uri, ex.toString()));
+            return true;
+        } catch (UnknownHostException ex) {
+            // Caused by InetAddress.getByName() while doing DNS lookup; only literal IPs are
+            logger.debug(String.format("The requested URI %s causes %s", uri, ex.toString()));
+            return true;
+        }
     }
 
     public ProxyRelayClientHandler(String id) {
@@ -111,6 +176,13 @@ public class ProxyRelayClientHandler extends ChannelInboundHandlerAdapter {
             // Client initial HTTP request
             DefaultHttpRequest req = (DefaultHttpRequest) msg;
             this.uri = req.uri();
+            if (isInBlackList(this.uri)) {
+                ReferenceCountUtil.release(req);
+                DefaultFullHttpResponse resp = new DefaultFullHttpResponse(
+                        HttpVersion.HTTP_1_1, HttpResponseStatus.FORBIDDEN);
+                ctx.writeAndFlush(resp).addListener(ChannelFutureListener.CLOSE);
+                return;
+            }
             if (req.method() == HttpMethod.CONNECT) { // For TLS carrying HTTP (HTTPS) or whatever TCP protocol.
                 ReferenceCountUtil.release(req);
                 DefaultFullHttpResponse resp = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);

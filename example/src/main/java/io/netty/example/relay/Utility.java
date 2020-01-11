@@ -70,4 +70,11 @@ public class Utility {
     static SslContext clientSslContext() throws Exception {
         return sslCtx;
     }
+
+    public static String[] trimStrings(String[] ss) {
+        for (int i = 0; i < ss.length; i++) {
+            ss[i] = ss[i].trim();
+        }
+        return ss;
+    }
 }

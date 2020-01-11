@@ -52,21 +52,14 @@ public final class Server {
         return sb.toString();
     }
 
-    private static String[] trimStrings(String[] ss) {
-        for (int i = 0; i < ss.length; i++) {
-            ss[i] = ss[i].trim();
-        }
-        return ss;
-    }
-
     public static Server[] loadServers(String csv, int defaultPort) {
         if (csv == null || csv.length() == 0) {
             return null;
         }
-        String[] ss = trimStrings(csv.split(","));
+        String[] ss = Utility.trimStrings(csv.split(","));
         Server[] ret = new Server[ss.length];
         for (int i = 0; i < ss.length; i++) {
-            String[] hp = trimStrings(ss[i].split(":"));
+            String[] hp = Utility.trimStrings(ss[i].split(":"));
             String s = hp[0];
             int port = hp.length == 1 ? defaultPort : Integer.parseInt(hp[1]);
             ret[i] = new Server(s, port);
