@@ -24,6 +24,8 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.ChannelPromise;
+import io.netty.channel.EventLoop;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.DefaultHttpRequest;
@@ -40,8 +42,29 @@ public class ProxyRelayClientHandler extends ChannelInboundHandlerAdapter {
     private ProxyRelayRemoteHandler remoteHandler;
     private boolean issueRemoteRequestDone;
     private String uri;
-    private static final String proxyHost = ConfigPropertyLoader.getPropertyNotNull("remote.host");
-    private static final int proxyPort = Integer.parseInt(ConfigPropertyLoader.getProperty("remote.port", "443"));
+    private static final int defaultProxyServerPort = 443;
+    private static Server proxyServer = loadRemoteServer("remote.server");
+    private static final Server[] proxyServerPool = loadRemoteServers("remote.servers");
+
+    private static Server[] loadRemoteServers(String key) {
+        return Server.loadServers(ConfigPropertyLoader.getProperty(key, null), defaultProxyServerPort);
+    }
+
+    private static Server loadRemoteServer(String key) {
+        Server[] ss = loadRemoteServers(key);
+        return ss == null ? null : ss[0];
+    }
+
+    public static void ensureRemoteIsAvailable(EventLoop loop) throws Exception {
+        // TODO re-select best server when the last active connection has gone away for so long.
+        if (proxyServer != null) {
+            return;
+        }
+        if (proxyServerPool == null) {
+            throw new RuntimeException("no remote server is configured");
+        }
+        proxyServer = RemoteConnectionPoolTester.startAndSelectTheBestServer(loop, proxyServerPool, 10000);
+    }
 
     public ProxyRelayClientHandler(String id) {
         this.id = id;
@@ -54,6 +77,17 @@ public class ProxyRelayClientHandler extends ChannelInboundHandlerAdapter {
 
     private void issueRemoteRequest(String uri, Object msg, ChannelFutureListener remoteChannelFutureListener) {
         clientChannel.config().setAutoRead(false); // disable AutoRead until remote connection is ready
+        try {
+            ensureRemoteIsAvailable(clientChannel.eventLoop());
+        } catch (Exception ex) {
+            System.err.println("NO remote server(s) are available; cannot continue:");
+            System.err.println(ex.toString());
+            if (remoteChannelFutureListener != null) {
+                ChannelPromise promise = clientChannel.newPromise();
+                promise.addListener(remoteChannelFutureListener);
+                promise.tryFailure(ex);
+            }
+        }
         Request req = new Request(id, clientChannel, uri, msg);
         remoteHandler = new ProxyRelayRemoteHandler(req);
 
@@ -63,8 +97,8 @@ public class ProxyRelayClientHandler extends ChannelInboundHandlerAdapter {
                 .option(ChannelOption.SO_KEEPALIVE, true)
                 /* To get as bean, the instance will get its fields injected properly. */
                 // To make things simpler, one ProxyRelayRemoteInitializer is created for one bootstrap and pipeline.
-                .handler(new ProxyRelayRemoteInitializer(remoteHandler, proxyHost, proxyPort));
-        ChannelFuture f = b.connect(proxyHost, proxyPort);
+                .handler(new ProxyRelayRemoteInitializer(remoteHandler, proxyServer.getHost(), proxyServer.getPort()));
+        ChannelFuture f = b.connect(proxyServer.getHost(), proxyServer.getPort());
         remoteChannel = f.channel();
         if (remoteChannelFutureListener != null) {
             f.addListener(remoteChannelFutureListener);

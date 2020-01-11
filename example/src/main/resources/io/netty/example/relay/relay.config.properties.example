@@ -1,9 +1,10 @@
 # The local port on which the relay listens
 local.port = 8080
 
-# The address and account of the remote HTTPS tunnel server
-remote.host = demo.https-tunnel.com
-remote.port = 443
+# Definitions for the remote HTTPS tunnel servers, one or multiple. If remote.host is defined, then that one is used;
+# or otherwise a best from the pool of (comma-separated) servers defined in remote.hosts is selected.
+# Note that they accept the same username, and password. The server ports default to 443 if not specified.
+remote.server = demo.https-tunnel.com
+remote.servers = demo1.https-tunnel.com,demo2.https-tunnel.com:1443
 remote.username = username
 remote.password = password
-

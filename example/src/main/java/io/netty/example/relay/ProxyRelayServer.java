@@ -16,28 +16,36 @@
 package io.netty.example.relay;
 
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
 
 public class ProxyRelayServer {
-    private static final int port = Integer.parseInt(ConfigPropertyLoader.getProperty("local.port", "8080"));;
+    private static final InternalLogger logger = InternalLoggerFactory.getInstance(ProxyRelayServer.class);
+    private static final int port = Integer.parseInt(ConfigPropertyLoader.getProperty("local.port", "8080"));
 
     public static void main(String[] args) {
-        System.err.println("ProxyRelayServer started on port: " + port);
         EventLoopGroup bossGroup = new NioEventLoopGroup(1);
         EventLoopGroup workerGroup = new NioEventLoopGroup();
         try {
             ServerBootstrap b = new ServerBootstrap();
-            b.group(bossGroup, workerGroup)
+            ChannelFuture future = b.group(bossGroup, workerGroup)
                     .channel(NioServerSocketChannel.class)
                     .handler(new LoggingHandler(LogLevel.ERROR))
                     .childHandler(new ProxyRelayChannelInitializer())
-                    .bind(port).sync().channel().closeFuture().sync();
-        } catch (InterruptedException e) {
-            System.err.println("shit happens" + e.toString());
+                    .bind(port);
+            Channel channel = future.channel();
+            ProxyRelayClientHandler.ensureRemoteIsAvailable(channel.eventLoop());
+            logger.info("ProxyRelayServer started on port: " + port);
+            channel.closeFuture().sync();
+        } catch (Exception e) {
+            logger.error("shit happens" + e.toString());
         } finally {
             bossGroup.shutdownGracefully();
             workerGroup.shutdownGracefully();
