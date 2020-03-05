@@ -20,9 +20,7 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.SocketChannel;
-import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.logging.LogLevel;
-import io.netty.handler.logging.LoggingHandler;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslHandler;
 
@@ -64,9 +62,7 @@ public class ProxyRelayRemoteInitializer extends ChannelInitializer<SocketChanne
 
         pipeline.addLast("sslHandler", new SslHandler(engine));
         ch.pipeline().addLast("loggingHandlerBehindSSLHandler", new ConciseLoggingHandler(LogLevel.WARN));
-        pipeline.addLast("proxyAuthenticationHelper", new HttpClientCodec(
-                // Use the full constructor to set parseHttpAfterConnectRequest to true
-                4096, 8192, 8192, false, true, true));
+        pipeline.addLast(ProxyRelayRemoteHandler.proxyAuthHelper, ProxyRelayRemoteHandler.getProxyAuthHelper());
         //ch.pipeline().addLast("loggingHandlerBehindProxyAuth", new LoggingHandler(LogLevel.WARN));
         pipeline.addLast("coreHandler", remoteHandler);
     }

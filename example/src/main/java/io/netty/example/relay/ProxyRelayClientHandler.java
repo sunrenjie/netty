@@ -43,8 +43,14 @@ import java.net.URL;
 import java.net.UnknownHostException;
 import java.util.regex.Pattern;
 
+/**
+ * The client handler for the relay service.
+ *
+ */
 public class ProxyRelayClientHandler extends ChannelInboundHandlerAdapter {
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(ProxyRelayClientHandler.class);
+    // Name of the HttpServerCodec that is responsible for parsing the initial client HTTP requests.
+    public static final String proxyFrontEndHelper = "proxyFrontEndHelper";
 
     private final String id;
     private Channel clientChannel;
@@ -187,7 +193,7 @@ public class ProxyRelayClientHandler extends ChannelInboundHandlerAdapter {
                 ReferenceCountUtil.release(req);
                 DefaultFullHttpResponse resp = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
                 ctx.writeAndFlush(resp);
-                ctx.pipeline().remove("proxyFrontEndHelper");
+                ctx.pipeline().remove(proxyFrontEndHelper);
             } else { // plain HTTP
                 issueRemoteRequestDone = true;
                 issueRemoteRequest(uri, msg, null);

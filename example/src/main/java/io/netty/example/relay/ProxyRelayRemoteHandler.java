@@ -45,9 +45,12 @@ import static io.netty.buffer.Unpooled.copiedBuffer;
 
 /**
  * Design
- * This handler is a bit complex because we have to handle HTTP and HTTPS requests differently.
+ * This handler handles HTTP and HTTPS requests differently:
  * For HTTP requests, only one pipeline (and handler) is created that will queue and serve all of them.
+ * This is to re-use existing connections as much as possible.
  * For HTTPS requests, one pipeline (and handler) has to be created to serve one request, and then gets destroyed.
+ * This is because HTTPS tunneling cannot be re-used inherently.
+ *
  * 1. Whether this handler is for HTTP? this.req == null in constructor. The requests shall be enqued via the
  * #enqueNewRequest() method.
  * 2. How are the different handlers behavior differently? At #userEventTriggered() when ssl handshake finishes
@@ -56,10 +59,12 @@ import static io.netty.buffer.Unpooled.copiedBuffer;
  */
 
 public class ProxyRelayRemoteHandler extends ChannelInboundHandlerAdapter {
+    public static final String proxyAuthHelper = "proxyAuthHelper";
     private ChannelHandlerContext ctx;
     private static String proxyCred;
     private Request req;
-    private boolean proxyAuthenticationHelperIsInstalled = true;
+    // A HttpClientCodec named proxyAuthHelper is installed in ProxyRelayRemoteInitializer; so defaults to true here.
+    private boolean proxyAuthHelperIsInstalled = true;
     // The ssl session is available to new requests after ssl handshake is completed and before a response to HTTP
     // CONNECT method is received (after HTTP tunneling is set up, the connection is not available to other requests).
     private Boolean sslSessionAvailable;
@@ -78,6 +83,17 @@ public class ProxyRelayRemoteHandler extends ChannelInboundHandlerAdapter {
         byte[] bs = new byte[tmp.readableBytes()];
         tmp.getBytes(0, bs);
         proxyCred = new String(bs);
+    }
+
+    /**
+     *
+     * @return the HttpClientCodec responsible for parsing responses from remote servers.
+     */
+    public static HttpClientCodec getProxyAuthHelper() {
+        return new HttpClientCodec(
+                // TODO figure out whether it is still necessary to set parseHttpAfterConnectRequest to true.
+                // Use the full constructor to set parseHttpAfterConnectRequest to true
+                4096, 8192, 8192, false, true, false);
     }
 
     ProxyRelayRemoteHandler(Request req) {
@@ -119,13 +135,12 @@ public class ProxyRelayRemoteHandler extends ChannelInboundHandlerAdapter {
         // used across two HTTP requests, @see {@link HttpObjectEncoder#encode(ChannelHandlerContext, Object,
         // List<Object>)}.
         // TODO maybe we could find a way to reset the statue value and hence re-use the codec.
-        if (proxyAuthenticationHelperIsInstalled) {
-            ctx.pipeline().remove("proxyAuthenticationHelper");
+        if (proxyAuthHelperIsInstalled) {
+            ctx.pipeline().remove(proxyAuthHelper);
+        } else {
+            proxyAuthHelperIsInstalled = true;
         }
-        proxyAuthenticationHelperIsInstalled = true;
-        ctx.pipeline().addBefore("coreHandler", "proxyAuthenticationHelper", new HttpClientCodec(
-                // Use the full constructor to set parseHttpAfterConnectRequest to true
-                4096, 8192, 8192, false, true, true));
+        ctx.pipeline().addBefore("coreHandler", proxyAuthHelper, getProxyAuthHelper());
         ctx.pipeline().writeAndFlush(request);
     }
 
@@ -150,9 +165,8 @@ public class ProxyRelayRemoteHandler extends ChannelInboundHandlerAdapter {
                     // Now switch to tunnel mode, initialize the original user request.
                     sslSessionAvailable = false; // mark as inaccessible to other requests
                     // No need to remove the client http codec here; if further communications are not HTTP.
-                    // TODO the helper name as a bean.
-                    ctx.pipeline().remove("proxyAuthenticationHelper");
-                    proxyAuthenticationHelperIsInstalled = false;
+                    ctx.pipeline().remove(proxyAuthHelper);
+                    proxyAuthHelperIsInstalled = false;
                     // Forward the client HTTP request to remote. For HTTPS it is ClientHello;
                     // for HTTP it is the original request amended with the HTTP header Proxy-Authorization.
                     ctx.writeAndFlush(req.msg);

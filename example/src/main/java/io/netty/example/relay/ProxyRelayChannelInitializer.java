@@ -28,7 +28,7 @@ public class ProxyRelayChannelInitializer extends ChannelInitializer<SocketChann
     @Override
     protected void initChannel(SocketChannel ch) throws Exception {
         //ch.pipeline().addLast(new LoggingHandler(LogLevel.WARN));
-        ch.pipeline().addLast("proxyFrontEndHelper", new HttpServerCodec());
+        ch.pipeline().addLast(ProxyRelayClientHandler.proxyFrontEndHelper, new HttpServerCodec());
         //ch.pipeline().addLast(new LoggingHandler(LogLevel.WARN));
         ch.pipeline().addLast(new ProxyRelayClientHandler("task-" + taskCounter.getAndIncrement()));
     }
