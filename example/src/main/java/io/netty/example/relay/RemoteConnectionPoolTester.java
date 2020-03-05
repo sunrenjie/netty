@@ -114,7 +114,7 @@ public class RemoteConnectionPoolTester extends ChannelInitializer<SocketChannel
         logger.info(String.format("To test servers %s with timeout of %.02f seconds", Server.dumpServers(servers),
                 millisMaxDelay / 1000.0));
         logger.info("Whoever finishes a full SSL handshake successfully first will be chosen.");
-        Long beg = System.currentTimeMillis();
+        Long beg = System.currentTimeMillis(), end = beg + millisMaxDelay;
         finishedAt.add(new Pair<Server, Long>(null, beg)); // the first special record, the beginning.
         final DefaultPromise<ConcurrentLinkedQueue<Pair<Server, Long>>> promise =
                 new DefaultPromise<ConcurrentLinkedQueue<Pair<Server, Long>>>(loop);
@@ -137,9 +137,8 @@ public class RemoteConnectionPoolTester extends ChannelInitializer<SocketChannel
                 }
             }, millisMaxDelay, TimeUnit.MILLISECONDS);
         }
-        // Handle the promise with delay
-        // sleep through the rest of the time.
-        for (int i = 0; i < millisMaxDelay - (System.currentTimeMillis() - beg); i += 100) {
+        // Sync wait until either time out happens or promise is done.
+        while (System.currentTimeMillis() <= end) {
             if (promise.isDone()) {
                 break;
             }
